@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&family=Tajawal:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Cairo", "Tajawal", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  /* Madrasati Saudi Ministry of Education Palette */
+  --color-madrasati-dark: #0f4c52;
+  --color-madrasati-teal: #14727a;
+  --color-madrasati-teal-light: #1da1ad;
+  --color-madrasati-teal-bg: #f1f8f9;
+  --color-madrasati-gold: #ffffff;
+  --color-madrasati-gold-dark: #ffffff;
+  --color-madrasati-gold-bg: rgba(255, 255, 255, 0.2);
+  --color-madrasati-green: #2e7d32;
+  --color-madrasati-green-bg: #edf7ed;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #f7fafb;
+}
