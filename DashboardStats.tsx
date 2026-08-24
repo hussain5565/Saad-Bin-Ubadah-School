@@ -383,13 +383,11 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
           <LucideIcon name="Info" size={18} />
         </div>
         <div className="space-y-1 text-xs">
-  <h4 className="font-bold text-madrasati-dark text-xs">
-    حوكمة الملف الإجرائي
-  </h4>
-  <p className="text-slate-650 leading-relaxed font-medium">
-    نظام إلكتروني متكامل لمتابعة مؤشرات الأداء والبيانات.
-  </p>
-</div>
+          <h4 className="font-bold text-madrasati-dark text-xs">حوكمة الملف الإجرائي:</h4>
+          <p className="text-slate-650 leading-relaxed font-medium">
+            تتوافق هذه المنصة الرقمية وبنيتها التحتية مع الدليل التنظيمي والإجرائي لمدارس وزارة التعليم بالمملكة العربية السعودية، وتتيح رصد ومتابعة مستويات التقدم والجهوزية ورفع الشواهد.
+          </p>
+        </div>
       </div>
     </div>
   );
