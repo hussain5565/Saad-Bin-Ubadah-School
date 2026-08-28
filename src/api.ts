@@ -20,20 +20,42 @@ export const api = {
     }
 
     // 2. Try Express API as fallback only if not in pure static mode
-    try {
-      const [config, pages] = await Promise.all([
-        this.getConfig(),
-        this.getPages(),
-      ]);
-
-      if (config || (pages && pages.length > 0)) {
-        return {
-          config: config || undefined,
-          pages: pages || undefined,
-        };
+    if (this.isLocalBackendAvailable) {
+      try {
+        const res = await fetch('/api/all');
+        if (res.ok) {
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data && (data.config || (data.pages && data.pages.length > 0) || (data.sections && data.sections.length > 0) || data.settings)) {
+              return {
+                config: data.config || undefined,
+                pages: data.pages || undefined,
+                sections: data.sections || undefined,
+                settings: data.settings || undefined,
+              };
+            }
+          }
+        }
+      } catch {
+        // Ignore and try individual endpoints
       }
-    } catch {
-      // Ignore
+
+      try {
+        const [config, pages] = await Promise.all([
+          this.getConfig(),
+          this.getPages(),
+        ]);
+
+        if (config || (pages && pages.length > 0)) {
+          return {
+            config: config || undefined,
+            pages: pages || undefined,
+          };
+        }
+      } catch {
+        // Ignore
+      }
     }
 
     return null;
@@ -51,11 +73,18 @@ export const api = {
 
     // 2. Also sync to Express API if available in local development
     if (this.isLocalBackendAvailable) {
-      if (data.config) {
-        this.saveConfig(data.config).catch(() => {});
-      }
-      if (data.pages) {
-        this.savePages(data.pages).catch(() => {});
+      try {
+        await fetch('/api/all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+      } catch {
+        // Fallback to individual
+        if (data.config) this.saveConfig(data.config).catch(() => {});
+        if (data.pages) this.savePages(data.pages).catch(() => {});
+        if (data.sections) this.saveSections(data.sections).catch(() => {});
+        if (data.settings) this.saveSettings(data.settings).catch(() => {});
       }
     }
 
@@ -180,14 +209,36 @@ export const api = {
   async getSections(): Promise<PortfolioSection[] | null> {
     if (supabaseDb.isConfigured()) {
       const supaData = await supabaseDb.fetchAll();
-      return supaData?.sections || null;
+      if (supaData?.sections && supaData.sections.length > 0) return supaData.sections;
+    }
+    if (this.isLocalBackendAvailable) {
+      try {
+        const res = await fetch('/api/sections');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) return data;
+        }
+      } catch {
+        // Ignore
+      }
     }
     return null;
   },
 
   async saveSections(sections: PortfolioSection[]): Promise<boolean> {
     if (supabaseDb.isConfigured()) {
-      return await supabaseDb.saveItem('sections', sections);
+      await supabaseDb.saveItem('sections', sections);
+    }
+    if (this.isLocalBackendAvailable) {
+      try {
+        await fetch('/api/sections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sections),
+        });
+      } catch {
+        // Ignore
+      }
     }
     return true;
   },
@@ -196,14 +247,35 @@ export const api = {
   async getSettings(): Promise<AppSecuritySettings | null> {
     if (supabaseDb.isConfigured()) {
       const supaData = await supabaseDb.fetchAll();
-      return supaData?.settings || null;
+      if (supaData?.settings) return supaData.settings;
+    }
+    if (this.isLocalBackendAvailable) {
+      try {
+        const res = await fetch('/api/settings');
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch {
+        // Ignore
+      }
     }
     return null;
   },
 
   async saveSettings(settings: AppSecuritySettings): Promise<boolean> {
     if (supabaseDb.isConfigured()) {
-      return await supabaseDb.saveItem('settings', settings);
+      await supabaseDb.saveItem('settings', settings);
+    }
+    if (this.isLocalBackendAvailable) {
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
+        });
+      } catch {
+        // Ignore
+      }
     }
     return true;
   }

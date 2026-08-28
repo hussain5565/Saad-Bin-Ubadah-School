@@ -9,7 +9,7 @@ interface ControlPanelPageDetailsProps {
   onToggleCriterion: (pageId: number, criterionId: string) => void;
   onEditCriterionText: (pageId: number, criterionId: string, newText: string) => void;
   onDeleteCriterion: (pageId: number, criterionId: string) => void;
-  onAddAttachment: (pageId: number, name: string, type: AttachmentType, url: string, size?: string) => void;
+  onAddAttachment: (pageId: number, name: string, type: AttachmentType, url: string, size?: string, criterionId?: string) => void;
   onDeleteAttachment: (pageId: number, attachmentId: string) => void;
   onOpenAttachment?: (att: Attachment) => void;
 }
@@ -32,8 +32,11 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
   const [attType, setAttType] = useState<AttachmentType>('file');
   const [attUrl, setAttUrl] = useState('');
   const [attSize, setAttSize] = useState<string | undefined>(undefined);
+  const [selectedCritId, setSelectedCritId] = useState<string>('');
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const critFileInputRef = useRef<HTMLInputElement>(null);
+  const [activeUploadCritId, setActiveUploadCritId] = useState<string | null>(null);
 
   // Local state for inline criterion editing
   const [editingCritId, setEditingCritId] = useState<string | null>(null);
@@ -49,10 +52,11 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
   const handleAddAttSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!attName.trim()) return;
-    onAddAttachment(page.id, attName.trim(), attType, attUrl.trim() || '#', attSize);
+    onAddAttachment(page.id, attName.trim(), attType, attUrl.trim() || '#', attSize, selectedCritId || undefined);
     setAttName('');
     setAttUrl('');
     setAttSize(undefined);
+    setSelectedCritId('');
   };
 
   const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -72,6 +76,31 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleCritFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !activeUploadCritId) return;
+
+    try {
+      setIsUploading(true);
+      const file = files[0];
+      const processed = await processUploadedFile(file);
+      onAddAttachment(
+        page.id,
+        processed.name,
+        processed.type,
+        processed.dataUrl,
+        processed.sizeString,
+        activeUploadCritId
+      );
+    } catch (err) {
+      console.error('Error uploading file for criterion:', err);
+    } finally {
+      setIsUploading(false);
+      setActiveUploadCritId(null);
+      if (critFileInputRef.current) critFileInputRef.current.value = '';
     }
   };
 
@@ -121,88 +150,150 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
                 لا توجد معايير مخصصة لهذه الصفحة حالياً. أضف معياراً بالأسفل.
               </p>
             ) : (
-              <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
-                {page.criteria.map((crit) => (
-                  <div
-                    key={crit.id}
-                    className={`flex items-start gap-2 p-2 rounded-lg border text-xs justify-between ${
-                      crit.isMet 
-                        ? 'bg-emerald-50/50 border-emerald-100/80 text-emerald-950' 
-                        : 'bg-slate-50 border-slate-150 text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-start gap-2 w-full">
-                      {/* Checkbox to mark met/unmet */}
-                      <button
-                        type="button"
-                        onClick={() => onToggleCriterion(page.id, crit.id)}
-                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 mt-0.5 transition-colors cursor-pointer ${
-                          crit.isMet
-                            ? 'bg-madrasati-teal border-madrasati-teal text-white'
-                            : 'bg-white border-slate-300 text-slate-400 hover:border-slate-400'
-                        }`}
-                      >
-                        {crit.isMet && <LucideIcon name="Check" size={10} />}
-                      </button>
+              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                {page.criteria.map((crit) => {
+                  const critAttachments = page.attachments.filter(a => a.criterionId === crit.id);
+                  return (
+                    <div
+                      key={crit.id}
+                      className={`p-2.5 rounded-lg border text-xs space-y-2 transition-all ${
+                        crit.isMet 
+                          ? 'bg-emerald-50/50 border-emerald-100/80 text-emerald-950' 
+                          : 'bg-slate-50 border-slate-150 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2 justify-between">
+                        <div className="flex items-start gap-2 w-full">
+                          {/* Checkbox to mark met/unmet */}
+                          <button
+                            type="button"
+                            onClick={() => onToggleCriterion(page.id, crit.id)}
+                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 mt-0.5 transition-colors cursor-pointer ${
+                              crit.isMet
+                                ? 'bg-madrasati-teal border-madrasati-teal text-white'
+                                : 'bg-white border-slate-300 text-slate-400 hover:border-slate-400'
+                            }`}
+                          >
+                            {crit.isMet && <LucideIcon name="Check" size={10} />}
+                          </button>
 
-                      <div className="flex-1">
-                        {editingCritId === crit.id ? (
-                          <div className="flex gap-1.5 items-center">
-                            <input
-                              type="text"
-                              value={editingCritText}
-                              onChange={(e) => setEditingCritText(e.target.value)}
-                              className="w-full text-xs px-2 py-0.5 bg-white border border-madrasati-teal rounded focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => saveEditingCrit(crit.id)}
-                              className="p-1 bg-madrasati-teal text-white rounded hover:bg-madrasati-dark cursor-pointer text-[10px]"
-                              title="حفظ"
-                            >
-                              <LucideIcon name="Check" size={11} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingCritId(null)}
-                              className="p-1 bg-slate-300 text-slate-700 rounded hover:bg-slate-400 cursor-pointer text-[10px]"
-                              title="إلغاء"
-                            >
-                              <LucideIcon name="X" size={11} />
-                            </button>
+                          <div className="flex-1">
+                            {editingCritId === crit.id ? (
+                              <div className="flex gap-1.5 items-center">
+                                <input
+                                  type="text"
+                                  value={editingCritText}
+                                  onChange={(e) => setEditingCritText(e.target.value)}
+                                  className="w-full text-xs px-2 py-0.5 bg-white border border-madrasati-teal rounded focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => saveEditingCrit(crit.id)}
+                                  className="p-1 bg-madrasati-teal text-white rounded hover:bg-madrasati-dark cursor-pointer text-[10px]"
+                                  title="حفظ"
+                                >
+                                  <LucideIcon name="Check" size={11} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingCritId(null)}
+                                  className="p-1 bg-slate-300 text-slate-700 rounded hover:bg-slate-400 cursor-pointer text-[10px]"
+                                  title="إلغاء"
+                                >
+                                  <LucideIcon name="X" size={11} />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className={`${crit.isMet ? 'line-through text-slate-400 font-medium' : 'text-slate-800 font-bold'}`}>
+                                {crit.text}
+                              </span>
+                            )}
                           </div>
-                        ) : (
-                          <span className={`${crit.isMet ? 'line-through text-slate-400 font-medium' : 'text-slate-800 font-bold'}`}>
-                            {crit.text}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                        </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {editingCritId !== crit.id && (
-                        <button
-                          type="button"
-                          onClick={() => startEditingCrit(crit)}
-                          className="text-slate-400 hover:text-madrasati-teal p-0.5 hover:bg-slate-100 rounded cursor-pointer"
-                          title="تعديل هذا المعيار"
-                        >
-                          <LucideIcon name="Edit3" size={11} />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {/* Quick attach button for this specific criterion */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveUploadCritId(crit.id);
+                              critFileInputRef.current?.click();
+                            }}
+                            className="text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200/70 p-1 rounded cursor-pointer text-[10px] flex items-center gap-0.5"
+                            title="إرفاق ورفع شاهد لهذا المعيار مباشرة"
+                          >
+                            <LucideIcon name="Paperclip" size={11} />
+                            <span className="hidden sm:inline text-[9px] font-bold">إرفاق شاهد</span>
+                          </button>
+
+                          {editingCritId !== crit.id && (
+                            <button
+                              type="button"
+                              onClick={() => startEditingCrit(crit)}
+                              className="text-slate-400 hover:text-madrasati-teal p-1 hover:bg-slate-100 rounded cursor-pointer"
+                              title="تعديل هذا المعيار"
+                            >
+                              <LucideIcon name="Edit3" size={11} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onDeleteCriterion(page.id, crit.id)}
+                            className="text-slate-400 hover:text-rose-600 p-1 hover:bg-rose-50 rounded cursor-pointer transition-colors"
+                            title="حذف هذا البند أو المعيار"
+                          >
+                            <LucideIcon name="Trash2" size={11} className="text-rose-500 hover:text-rose-700" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Display evidence attached to this specific criterion */}
+                      {critAttachments.length > 0 && (
+                        <div className="pt-1.5 border-t border-slate-200/50 flex flex-wrap gap-1.5 items-center">
+                          <span className="text-[9px] font-extrabold text-teal-800 flex items-center gap-1">
+                            <LucideIcon name="FileCheck" size={10} className="text-teal-600" />
+                            <span>الشواهد المدرجة ({critAttachments.length}):</span>
+                          </span>
+                          {critAttachments.map(att => (
+                            <div 
+                              key={att.id} 
+                              className="inline-flex items-center gap-1 bg-white border border-teal-200 px-2 py-0.5 rounded text-[10px] font-bold text-slate-800 shadow-3xs"
+                            >
+                              <span className="truncate max-w-[120px]" title={att.name}>{att.name}</span>
+                              <button
+                                type="button"
+                                onClick={() => onOpenAttachment && onOpenAttachment(att)}
+                                className="text-teal-600 hover:text-teal-800 cursor-pointer p-0.5"
+                                title="عرض الشاهد"
+                              >
+                                <LucideIcon name="ExternalLink" size={9} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onDeleteAttachment(page.id, att.id)}
+                                className="text-slate-400 hover:text-rose-600 cursor-pointer p-0.5"
+                                title="حذف الشاهد"
+                              >
+                                <LucideIcon name="X" size={9} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => onDeleteCriterion(page.id, crit.id)}
-                        className="text-slate-400 hover:text-rose-600 p-1 hover:bg-rose-50 rounded cursor-pointer transition-colors"
-                        title="حذف هذا البند أو المعيار"
-                      >
-                        <LucideIcon name="Trash2" size={12} className="text-rose-500 hover:text-rose-700" />
-                      </button>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
+
+            {/* Hidden Input for criterion-specific direct upload */}
+            <input
+              type="file"
+              ref={critFileInputRef}
+              className="hidden"
+              onChange={handleCritFilePicked}
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+            />
 
             {/* Form to add a quick criterion */}
             <form onSubmit={handleAddCritSubmit} className="flex gap-1.5">
@@ -270,6 +361,8 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
                     typeLabel = "رابط";
                   }
 
+                  const linkedCrit = page.criteria.find(c => c.id === att.criterionId);
+
                   return (
                     <div
                       key={att.id}
@@ -279,9 +372,16 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
                         <span className={`text-[9px] font-bold border rounded px-1 shrink-0 ${badgeColor}`}>
                           {typeLabel}
                         </span>
-                        <span className="text-slate-800 font-bold truncate max-w-[150px]" title={att.name}>
-                          {att.name}
-                        </span>
+                        <div className="space-y-0.5">
+                          <span className="text-slate-800 font-bold truncate max-w-[150px] block" title={att.name}>
+                            {att.name}
+                          </span>
+                          {linkedCrit && (
+                            <span className="text-[8px] text-teal-700 font-extrabold bg-teal-50 px-1 py-0.2 rounded border border-teal-100 truncate max-w-[140px] block">
+                              📌 {linkedCrit.text}
+                            </span>
+                          )}
+                        </div>
                         {att.size && (
                           <span className="text-[9px] text-slate-400 font-normal">({att.size})</span>
                         )}
@@ -319,7 +419,7 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
 
             {/* Form to add an attachment */}
             <form onSubmit={handleAddAttSubmit} className="space-y-2 bg-slate-50/70 p-2.5 rounded-lg border border-slate-200/50">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div className="space-y-0.5">
                   <label className="text-[9px] font-bold text-slate-500">اسم المرفق</label>
                   <input
@@ -343,6 +443,22 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
                     <option value="image">صورة إثبات / وثيقة</option>
                     <option value="drive">مجلد Google Drive</option>
                     <option value="url">رابط خارجي</option>
+                  </select>
+                </div>
+
+                <div className="space-y-0.5">
+                  <label className="text-[9px] font-bold text-slate-500">ربط بمعيار محدد (اختياري)</label>
+                  <select
+                    value={selectedCritId}
+                    onChange={(e) => setSelectedCritId(e.target.value)}
+                    className="w-full text-[10px] px-2 py-1 bg-white border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-madrasati-teal font-medium"
+                  >
+                    <option value="">شاهد عام لجميع معايير الصفحة</option>
+                    {page.criteria.map((c, i) => (
+                      <option key={c.id} value={c.id}>
+                        {i + 1}. {c.text.substring(0, 30)}{c.text.length > 30 ? '...' : ''}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

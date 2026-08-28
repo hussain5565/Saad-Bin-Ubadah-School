@@ -13,6 +13,7 @@ interface DashboardStatsProps {
   onToggleControlPanel: () => void;
   onUpdatePhoto?: (newPhotoUrl: string) => void;
   onOpenAdminLogin?: (onSuccess?: () => void) => void;
+  onAddNewPageToSection?: (sectionId: string) => void;
 }
 
 export const DashboardStats: React.FC<DashboardStatsProps> = ({ 
@@ -24,6 +25,7 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
   onToggleControlPanel,
   onUpdatePhoto,
   onOpenAdminLogin,
+  onAddNewPageToSection,
 }) => {
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [isPhotoDragging, setIsPhotoDragging] = useState(false);
@@ -386,63 +388,121 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         <div className="space-y-8 pt-2">
           {sections.map((sec) => {
             const sectionPages = pages.filter(p => (p.sectionId || 'school-admin') === sec.id);
-            if (sectionPages.length === 0) return null;
 
             return (
               <div key={sec.id} className="space-y-3.5 border-t border-slate-100/80 pt-4 first:border-0 first:pt-0">
-                <div className="flex items-center gap-2 justify-start bg-slate-50/80 py-1.5 px-3 rounded-lg border border-slate-200/40 w-fit">
-                  <LucideIcon name="FolderOpen" size={14} className="text-madrasati-teal" />
-                  <span className="font-black text-slate-800 text-xs">{sec.name}</span>
-                  <span className="text-[10px] text-madrasati-teal bg-madrasati-teal-bg px-2 py-0.5 rounded-full font-bold">
-                    {sectionPages.length} معايير ومؤشرات
-                  </span>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 justify-start bg-slate-50/80 py-1.5 px-3 rounded-lg border border-slate-200/40 w-fit">
+                    <LucideIcon name="FolderOpen" size={14} className="text-madrasati-teal" />
+                    <span className="font-black text-slate-800 text-xs">{sec.name}</span>
+                    <span className="text-[10px] text-madrasati-teal bg-madrasati-teal-bg px-2 py-0.5 rounded-full font-bold">
+                      {sectionPages.length} معايير ومؤشرات
+                    </span>
+                  </div>
+
+                  {isAdminMode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onAddNewPageToSection) {
+                          onAddNewPageToSection(sec.id);
+                        } else {
+                          onToggleControlPanel();
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-50 hover:bg-teal-100 text-teal-900 border border-teal-200/80 rounded-xl text-xs font-black transition-all cursor-pointer shadow-3xs"
+                      title="إضافة معيار جديد لهذا القسم"
+                    >
+                      <LucideIcon name="Plus" size={13} className="text-teal-700" />
+                      <span>إضافة معيار لهذا القسم</span>
+                    </button>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
-                  {sectionPages.map((p, idx) => {
-                    const status = getPageStatus(p);
-                    let statusBadge = "";
-                    let statusStyle = "";
-                    
-                    if (status === 'complete') {
-                      statusBadge = "مكتمل";
-                      statusStyle = "border-emerald-250 bg-emerald-50/40 text-emerald-900 hover:bg-emerald-50 hover:border-emerald-300";
-                    } else if (status === 'in_progress') {
-                      statusBadge = "قيد العمل";
-                      statusStyle = "border-slate-250 bg-slate-100/60 text-slate-800 hover:bg-slate-100 hover:border-slate-300";
-                    } else {
-                      statusBadge = "معايير فارغة";
-                      statusStyle = "border-slate-200 bg-slate-50/70 text-slate-500 hover:bg-slate-100 hover:border-slate-300";
-                    }
-
-                    return (
+                {sectionPages.length === 0 ? (
+                  <div className="bg-slate-50/60 border border-dashed border-slate-250 rounded-2xl p-6 text-center space-y-2">
+                    <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                      <LucideIcon name="FolderPlus" size={16} />
+                    </div>
+                    <p className="text-xs text-slate-600 font-bold">
+                      لا توجد معايير أو مؤشرات مضافة في قسم ({sec.name}) حالياً.
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      يمكنك إنشاء معايير جديدة وتخصيص الشواهد ومؤشرات الأداء التابعة لهذا القسم مباشرة.
+                    </p>
+                    {isAdminMode ? (
                       <button
-                        key={p.id}
-                        onClick={() => onSelectPage(p.id)}
-                        className={`flex flex-col text-right justify-between p-3.5 rounded-xl border text-xs font-bold transition-all duration-200 cursor-pointer ${statusStyle}`}
+                        type="button"
+                        onClick={() => {
+                          if (onAddNewPageToSection) {
+                            onAddNewPageToSection(sec.id);
+                          } else {
+                            onToggleControlPanel();
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-madrasati-teal hover:bg-teal-700 text-white rounded-xl text-xs font-black transition-colors cursor-pointer shadow-xs mt-1"
                       >
-                        <div className="flex items-start justify-between w-full mb-3">
-                          <span className="text-[10px] text-madrasati-dark font-black bg-white px-2 py-0.5 rounded-md border border-slate-200/80 shadow-2xs">
-                            {p.code ? p.code : `معيار ${idx + 1}`}
-                          </span>
-                          <div className="w-7 h-7 rounded-lg bg-white/90 border border-slate-150 flex items-center justify-center text-madrasati-teal shadow-3xs shrink-0">
-                            <LucideIcon name={p.iconName} size={14} />
-                          </div>
-                        </div>
-
-                        <div className="space-y-1 w-full text-right">
-                          <h4 className="font-extrabold text-slate-800 line-clamp-2 leading-tight min-h-[32px] text-slate-800">
-                            {p.title}
-                          </h4>
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200/30">
-                            <span>{p.criteria.length} معايير</span>
-                            <span className="font-bold">{statusBadge}</span>
-                          </div>
-                        </div>
+                        <LucideIcon name="Plus" size={14} />
+                        <span>إنشاء أول معيار في قسم {sec.name}</span>
                       </button>
-                    );
-                  })}
-                </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onOpenAdminLogin && onOpenAdminLogin()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors cursor-pointer shadow-3xs mt-1"
+                      >
+                        <LucideIcon name="Lock" size={12} className="text-slate-400" />
+                        <span>تسجيل الدخول كمشرف لإضافة معايير</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
+                    {sectionPages.map((p, idx) => {
+                      const status = getPageStatus(p);
+                      let statusBadge = "";
+                      let statusStyle = "";
+                      
+                      if (status === 'complete') {
+                        statusBadge = "مكتمل";
+                        statusStyle = "border-emerald-250 bg-emerald-50/40 text-emerald-900 hover:bg-emerald-50 hover:border-emerald-300";
+                      } else if (status === 'in_progress') {
+                        statusBadge = "قيد العمل";
+                        statusStyle = "border-slate-250 bg-slate-100/60 text-slate-800 hover:bg-slate-100 hover:border-slate-300";
+                      } else {
+                        statusBadge = "معايير فارغة";
+                        statusStyle = "border-slate-200 bg-slate-50/70 text-slate-500 hover:bg-slate-100 hover:border-slate-300";
+                      }
+
+                      return (
+                        <button
+                          key={p.id}
+                          onClick={() => onSelectPage(p.id)}
+                          className={`flex flex-col text-right justify-between p-3.5 rounded-xl border text-xs font-bold transition-all duration-200 cursor-pointer ${statusStyle}`}
+                        >
+                          <div className="flex items-start justify-between w-full mb-3">
+                            <span className="text-[10px] text-madrasati-dark font-black bg-white px-2 py-0.5 rounded-md border border-slate-200/80 shadow-2xs">
+                              {p.code ? p.code : `معيار ${idx + 1}`}
+                            </span>
+                            <div className="w-7 h-7 rounded-lg bg-white/90 border border-slate-150 flex items-center justify-center text-madrasati-teal shadow-3xs shrink-0">
+                              <LucideIcon name={p.iconName} size={14} />
+                            </div>
+                          </div>
+
+                          <div className="space-y-1 w-full text-right">
+                            <h4 className="font-extrabold text-slate-800 line-clamp-2 leading-tight min-h-[32px] text-slate-800">
+                              {p.title}
+                            </h4>
+                            <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200/30">
+                              <span>{p.criteria.length} معايير</span>
+                              <span className="font-bold">{statusBadge}</span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}

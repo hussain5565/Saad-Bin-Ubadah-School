@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { Pool } from "pg";
@@ -13,9 +14,50 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// In-Memory fallback store
-let memoryConfig: any = null;
-let memoryPages: any[] = [];
+// Server Local File Persistence Setup
+const DATA_DIR = path.join(process.cwd(), "data");
+const STORE_FILE = path.join(DATA_DIR, "portfolio_store.json");
+
+interface ServerStore {
+  config: any;
+  pages: any[];
+  sections: any[];
+  settings: any;
+}
+
+function loadLocalStore(): ServerStore {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(STORE_FILE)) {
+      const raw = fs.readFileSync(STORE_FILE, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn("Failed to load local store file:", err);
+  }
+  return {
+    config: null,
+    pages: [],
+    sections: [],
+    settings: null,
+  };
+}
+
+function saveLocalStore(store: ServerStore) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STORE_FILE, JSON.stringify(store, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Failed to save local store file:", err);
+  }
+}
+
+// In-Memory fallback store initialized from file if exists
+let localStore: ServerStore = loadLocalStore();
 
 // PostgreSQL Pool connection (only if DATABASE_URL is explicitly set)
 let pool: Pool | null = null;
@@ -25,7 +67,6 @@ if (process.env.DATABASE_URL && process.env.DATABASE_URL.trim() !== "") {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
     });
-    // Silent error handler on idle clients to prevent uncaught exceptions
     pool.on("error", () => {
       // ignore idle errors
     });
@@ -45,6 +86,71 @@ async function queryDb(sql: string, params: any[] = []): Promise<any> {
 }
 
 // API Routes for Persistence
+
+// 0. Get All Data Combined
+app.get("/api/all", async (req, res) => {
+  try {
+    let config = localStore.config;
+    let pages = localStore.pages;
+    let sections = localStore.sections;
+    let settings = localStore.settings;
+
+    if (pool) {
+      const configRes = await queryDb("SELECT * FROM portfolio_config ORDER BY id ASC LIMIT 1");
+      if (configRes && configRes.rows.length > 0) {
+        const row = configRes.rows[0];
+        config = {
+          managerName: row.manager_name,
+          schoolName: row.school_name,
+          year: row.year,
+          managerTitle: row.manager_title,
+          logoUrl: row.logo_url || "",
+          managerPhotoUrl: row.manager_photo_url || "",
+          biography: row.biography || "",
+          vision: row.vision || "",
+          mission: row.mission || "",
+          values: row.values || "",
+        };
+      }
+
+      const pagesRes = await queryDb(
+        'SELECT id, code, title, icon_name as "iconName", description, criteria, attachments FROM portfolio_pages ORDER BY id ASC'
+      );
+      if (pagesRes && pagesRes.rows) {
+        pages = pagesRes.rows.map(r => ({
+          ...r,
+          criteria: typeof r.criteria === 'string' ? JSON.parse(r.criteria) : (r.criteria || []),
+          attachments: typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments || []),
+        }));
+      }
+    }
+
+    res.json({
+      config,
+      pages,
+      sections,
+      settings,
+    });
+  } catch {
+    res.json(localStore);
+  }
+});
+
+// 0. Save All Data Combined
+app.post("/api/all", async (req, res) => {
+  try {
+    const { config, pages, sections, settings } = req.body;
+    if (config !== undefined) localStore.config = config;
+    if (pages !== undefined) localStore.pages = pages;
+    if (sections !== undefined) localStore.sections = sections;
+    if (settings !== undefined) localStore.settings = settings;
+
+    saveLocalStore(localStore);
+    res.json({ success: true });
+  } catch {
+    res.json({ success: true });
+  }
+});
 
 // 1. Get Portfolio Config
 app.get("/api/config", async (req, res) => {
@@ -69,10 +175,9 @@ app.get("/api/config", async (req, res) => {
         });
       }
     }
-    // Fallback to in-memory
-    res.json(memoryConfig);
+    res.json(localStore.config);
   } catch {
-    res.json(memoryConfig);
+    res.json(localStore.config);
   }
 });
 
@@ -92,7 +197,7 @@ app.post("/api/config", async (req, res) => {
       values,
     } = req.body;
 
-    memoryConfig = {
+    localStore.config = {
       managerName,
       schoolName,
       year,
@@ -104,6 +209,7 @@ app.post("/api/config", async (req, res) => {
       mission: mission || "",
       values: values || "",
     };
+    saveLocalStore(localStore);
 
     if (pool) {
       const existing = await queryDb("SELECT id FROM portfolio_config LIMIT 1");
@@ -161,28 +267,40 @@ app.get("/api/pages", async (req, res) => {
   try {
     if (pool) {
       const result = await queryDb(
-        "SELECT id, code, title, icon_name as \"iconName\", description, criteria, attachments FROM portfolio_pages ORDER BY id ASC"
+        'SELECT id, code, title, icon_name as "iconName", description, criteria, attachments FROM portfolio_pages ORDER BY id ASC'
       );
       if (result && result.rows) {
-        return res.json(result.rows);
+        return res.json(result.rows.map(r => ({
+          ...r,
+          criteria: typeof r.criteria === 'string' ? JSON.parse(r.criteria) : (r.criteria || []),
+          attachments: typeof r.attachments === 'string' ? JSON.parse(r.attachments) : (r.attachments || []),
+        })));
       }
     }
-    // Fallback to in-memory
-    res.json(memoryPages);
+    res.json(localStore.pages);
   } catch {
-    res.json(memoryPages);
+    res.json(localStore.pages);
   }
 });
 
-// 4. Save/Sync All Pages
+// 4. Save/Sync All Pages (With proper deletions)
 app.post("/api/pages", async (req, res) => {
   try {
     const pages = req.body;
     if (Array.isArray(pages)) {
-      memoryPages = pages;
+      localStore.pages = pages;
+      saveLocalStore(localStore);
     }
 
     if (pool && Array.isArray(pages)) {
+      const currentIds = pages.map((p) => p.id);
+      if (currentIds.length > 0) {
+        const placeholders = currentIds.map((_, i) => `$${i + 1}`).join(",");
+        await queryDb(`DELETE FROM portfolio_pages WHERE id NOT IN (${placeholders})`, currentIds);
+      } else {
+        await queryDb(`DELETE FROM portfolio_pages`);
+      }
+
       for (const page of pages) {
         await queryDb(
           `INSERT INTO portfolio_pages (id, code, title, icon_name, description, criteria, attachments, updated_at)
@@ -214,18 +332,43 @@ app.post("/api/pages", async (req, res) => {
   }
 });
 
+// 5. Sections
+app.get("/api/sections", (req, res) => {
+  res.json(localStore.sections || []);
+});
+
+app.post("/api/sections", (req, res) => {
+  if (Array.isArray(req.body)) {
+    localStore.sections = req.body;
+    saveLocalStore(localStore);
+  }
+  res.json({ success: true });
+});
+
+// 6. Settings
+app.get("/api/settings", (req, res) => {
+  res.json(localStore.settings || null);
+});
+
+app.post("/api/settings", (req, res) => {
+  localStore.settings = req.body;
+  saveLocalStore(localStore);
+  res.json({ success: true });
+});
+
 // 5. Update Single Page
 app.put("/api/pages/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const page = req.body;
 
-    const idx = memoryPages.findIndex((p) => p.id === id);
+    const idx = localStore.pages.findIndex((p: any) => p.id === id);
     if (idx >= 0) {
-      memoryPages[idx] = { ...memoryPages[idx], ...page };
+      localStore.pages[idx] = { ...localStore.pages[idx], ...page };
     } else {
-      memoryPages.push(page);
+      localStore.pages.push(page);
     }
+    saveLocalStore(localStore);
 
     if (pool) {
       await queryDb(

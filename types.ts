@@ -2,6 +2,7 @@ export type AttachmentType = 'file' | 'url' | 'drive' | 'image';
 
 export interface Attachment {
   id: string;
+  criterionId?: string; // Optional: Links this evidence to a specific criterion/indicator
   name: string;
   type: AttachmentType;
   url: string;

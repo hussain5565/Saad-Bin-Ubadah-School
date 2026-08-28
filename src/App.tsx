@@ -331,6 +331,9 @@ export default function App() {
   const [newAttachmentName, setNewAttachmentName] = useState<string>('');
   const [newAttachmentType, setNewAttachmentType] = useState<AttachmentType>('file');
   const [newAttachmentUrl, setNewAttachmentUrl] = useState<string>('');
+  const [selectedCriterionIdForNewAttachment, setSelectedCriterionIdForNewAttachment] = useState<string>('');
+  const [activeUploadCriterionId, setActiveUploadCriterionId] = useState<string | null>(null);
+  const criterionFileUploadInputRef = useRef<HTMLInputElement>(null);
   const [isDraggingPhoto, setIsDraggingPhoto] = useState<boolean>(false);
   // Supabase Connection Management States
   const [supabaseUrl, setSupabaseUrl] = useState<string>(() => getSupabaseCredentials().url);
@@ -340,6 +343,7 @@ export default function App() {
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
 
   const isInitialDbLoadDone = useRef(false);
+  const isApplyingRemoteUpdateRef = useRef(false);
 
   // Load from Supabase on startup (with fallback to localStorage/API)
   useEffect(() => {
@@ -348,6 +352,7 @@ export default function App() {
         const cloudData = await api.loadAll();
 
         if (cloudData) {
+          isApplyingRemoteUpdateRef.current = true;
           if (cloudData.config) {
             setConfig(cloudData.config);
             safeLocalStorageSet('portfolio_config_v1', cloudData.config);
@@ -378,6 +383,9 @@ export default function App() {
               safeLocalStorageSet('portfolio_attachments_lock_enabled_v2', String(cloudData.settings.isAttachmentsLockEnabled));
             }
           }
+          setTimeout(() => {
+            isApplyingRemoteUpdateRef.current = false;
+          }, 300);
         }
       } catch (err) {
         console.warn('Initial Supabase load note:', err);
@@ -407,30 +415,30 @@ export default function App() {
   // Save changes to localStorage & Supabase whenever they mutate
   useEffect(() => {
     safeLocalStorageSet('portfolio_pages_v1', pages);
-    if (isInitialDbLoadDone.current) {
+    if (isInitialDbLoadDone.current && !isApplyingRemoteUpdateRef.current) {
       const timer = setTimeout(() => {
         api.savePages(pages);
-      }, 500);
+      }, 300);
       return () => clearTimeout(timer);
     }
   }, [pages]);
 
   useEffect(() => {
     safeLocalStorageSet('portfolio_config_v1', config);
-    if (isInitialDbLoadDone.current) {
+    if (isInitialDbLoadDone.current && !isApplyingRemoteUpdateRef.current) {
       const timer = setTimeout(() => {
         api.saveConfig(config);
-      }, 500);
+      }, 300);
       return () => clearTimeout(timer);
     }
   }, [config]);
 
   useEffect(() => {
     safeLocalStorageSet('portfolio_sections_v2', sections);
-    if (isInitialDbLoadDone.current) {
+    if (isInitialDbLoadDone.current && !isApplyingRemoteUpdateRef.current) {
       const timer = setTimeout(() => {
         api.saveSections(sections);
-      }, 500);
+      }, 300);
       return () => clearTimeout(timer);
     }
   }, [sections]);
@@ -441,7 +449,7 @@ export default function App() {
     safeLocalStorageSet('portfolio_attachments_password_v2', attachmentsPassword);
     safeLocalStorageSet('portfolio_attachments_lock_enabled_v2', String(isAttachmentsLockEnabled));
 
-    if (isInitialDbLoadDone.current) {
+    if (isInitialDbLoadDone.current && !isApplyingRemoteUpdateRef.current) {
       const timer = setTimeout(() => {
         api.saveSettings({
           adminUsername,
@@ -449,7 +457,7 @@ export default function App() {
           attachmentsPassword,
           isAttachmentsLockEnabled,
         });
-      }, 500);
+      }, 300);
       return () => clearTimeout(timer);
     }
   }, [adminUsername, adminPassword, attachmentsPassword, isAttachmentsLockEnabled]);
@@ -579,7 +587,7 @@ export default function App() {
 
   const handleDeleteCriterion = (criterionId: string) => {
     if (!activePage) return;
-    setPages(prev => prev.map(p => {
+    const newPages = pages.map(p => {
       if (p.id === activePage.id) {
         return {
           ...p,
@@ -587,8 +595,11 @@ export default function App() {
         };
       }
       return p;
-    }));
-    triggerFeedback('success', 'تم حذف المعيار بنجاح.');
+    });
+    setPages(newPages);
+    safeLocalStorageSet('portfolio_pages_v1', newPages);
+    api.savePages(newPages);
+    triggerFeedback('success', 'تم حذف المعيار وتحديث قاعدة البيانات بنجاح.');
   };
 
   // Attachment actions
@@ -601,6 +612,7 @@ export default function App() {
 
     const newAtt: Attachment = {
       id: `att-${Date.now()}`,
+      criterionId: selectedCriterionIdForNewAttachment || undefined,
       name: newAttachmentName.trim(),
       type: newAttachmentType,
       url: newAttachmentUrl.trim() || '#',
@@ -610,8 +622,12 @@ export default function App() {
 
     setPages(prev => prev.map(p => {
       if (p.id === activePage.id) {
+        const updatedCriteria = selectedCriterionIdForNewAttachment
+          ? p.criteria.map(c => c.id === selectedCriterionIdForNewAttachment ? { ...c, isMet: true } : c)
+          : p.criteria;
         return {
           ...p,
+          criteria: updatedCriteria,
           attachments: [...p.attachments, newAtt]
         };
       }
@@ -621,13 +637,14 @@ export default function App() {
     setNewAttachmentName('');
     setNewAttachmentUrl('');
     setNewAttachmentSize(undefined);
+    setSelectedCriterionIdForNewAttachment('');
     setShowAddAttachment(false);
     triggerFeedback('success', 'تم رفع وإضافة المرفق بنجاح لملف الشواهد.');
   };
 
   const handleDeleteAttachment = (attachmentId: string) => {
     if (!activePage) return;
-    setPages(prev => prev.map(p => {
+    const newPages = pages.map(p => {
       if (p.id === activePage.id) {
         return {
           ...p,
@@ -635,11 +652,14 @@ export default function App() {
         };
       }
       return p;
-    }));
-    triggerFeedback('success', 'تم حذف المرفق.');
+    });
+    setPages(newPages);
+    safeLocalStorageSet('portfolio_pages_v1', newPages);
+    api.savePages(newPages);
+    triggerFeedback('success', 'تم حذف المرفق وتحديث قاعدة البيانات بنجاح.');
   };
 
-  const processAndAddFiles = async (fileList: FileList | File[]) => {
+  const processAndAddFiles = async (fileList: FileList | File[], targetCriterionId?: string) => {
     if (!activePage) return;
     if (!isAdminMode) {
       triggerFeedback('error', 'عذراً! لا يمكن رفع الشواهد وسحب الملفات إلا في وضع الإدارة والتعديل (تأكد من رمز المرور).');
@@ -654,6 +674,7 @@ export default function App() {
         const processed = await processUploadedFile(file);
         newlyAdded.push({
           id: `att-upload-${Date.now()}-${i}`,
+          criterionId: targetCriterionId,
           name: processed.name,
           type: processed.type,
           url: processed.dataUrl,
@@ -665,8 +686,12 @@ export default function App() {
       if (newlyAdded.length > 0) {
         setPages(prev => prev.map(p => {
           if (p.id === activePage.id) {
+            const updatedCriteria = targetCriterionId
+              ? p.criteria.map(c => c.id === targetCriterionId ? { ...c, isMet: true } : c)
+              : p.criteria;
             return {
               ...p,
+              criteria: updatedCriteria,
               attachments: [...p.attachments, ...newlyAdded]
             };
           }
@@ -700,6 +725,14 @@ export default function App() {
     if (files && files.length > 0) {
       await processAndAddFiles(files);
     }
+  };
+
+  const handleCriterionFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !activeUploadCriterionId) return;
+    await processAndAddFiles(files, activeUploadCriterionId);
+    setActiveUploadCriterionId(null);
+    if (criterionFileUploadInputRef.current) criterionFileUploadInputRef.current.value = '';
   };
 
   const handleFormFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -747,12 +780,13 @@ export default function App() {
   };
 
   // Add a fully new page option (supports expanding beyond 19 pages)
-  const handleAddNewPage = () => {
+  const handleAddNewPage = (targetSectionId?: string) => {
+    const secId = targetSectionId || (activeSectionId !== 'all' ? activeSectionId : 'school-admin');
     const nextId = pages.length > 0 ? Math.max(...pages.map(p => p.id)) + 1 : 1;
     const newPage: PortfolioPage = {
       id: nextId,
       code: `إج-${nextId < 10 ? '0' + nextId : nextId}`,
-      sectionId: activeSectionId, // Assign to currently selected section
+      sectionId: secId, // Assign to target section
       title: `معيار جديد رقم ${nextId}`,
       iconName: 'Plus',
       description: 'معيار فرعي مخصص مضاف حديثاً حسب الدليل الإجرائي.',
@@ -760,6 +794,7 @@ export default function App() {
       attachments: []
     };
     setPages(prev => [...prev, newPage]);
+    setActiveSectionId(secId);
     setActiveTabId(nextId);
     triggerFeedback('success', `تم إنشاء المعيار الجديد وتفعيله بنجاح.`);
   };
@@ -788,10 +823,16 @@ export default function App() {
       'حذف تصنيف العمل الحالي',
       'هل أنت متأكد من حذف هذا القسم؟ سيتم نقل الصفحات المنتمية إليه إلى قسم الإدارة المدرسية تلقائياً لضمان عدم ضياع المستندات.',
       () => {
-        setSections(prev => prev.filter(s => s.id !== id));
-        setPages(prev => prev.map(p => p.sectionId === id ? { ...p, sectionId: 'school-admin' } : p));
+        const newSections = sections.filter(s => s.id !== id);
+        const newPages = pages.map(p => p.sectionId === id ? { ...p, sectionId: 'school-admin' } : p);
+        setSections(newSections);
+        setPages(newPages);
+        safeLocalStorageSet('portfolio_sections_v2', newSections);
+        safeLocalStorageSet('portfolio_pages_v1', newPages);
+        api.saveSections(newSections);
+        api.savePages(newPages);
         setActiveSectionId('school-admin');
-        triggerFeedback('success', 'تم حذف القسم وترحيل صفحاته للقسم الرئيسي بنجاح.');
+        triggerFeedback('success', 'تم حذف القسم وترحيل صفحاته وتحديث قاعدة البيانات بنجاح.');
       }
     );
   };
@@ -807,9 +848,12 @@ export default function App() {
       'حذف الصفحة بصورة نهائية',
       `هل أنت متأكد من حذف صفحة "${victim?.title}" بصورة نهائية؟ سيتم التخلص من كافة المعايير والشواهد الملحقة بها أيضاً.`,
       () => {
-        setPages(prev => prev.filter(p => p.id !== id));
+        const newPages = pages.filter(p => p.id !== id);
+        setPages(newPages);
+        safeLocalStorageSet('portfolio_pages_v1', newPages);
+        api.savePages(newPages);
         setActiveTabId(0);
-        triggerFeedback('success', 'تم حذف الصفحة والملحقات التابعة لها.');
+        triggerFeedback('success', 'تم حذف الصفحة والملحقات التابعة لها وتحديث قاعدة البيانات.');
       }
     );
   };
@@ -841,32 +885,51 @@ export default function App() {
   };
 
   const handleDeleteCriterionForPage = (pageId: number, criterionId: string) => {
-    setPages(prev => prev.map(p => p.id === pageId ? {
+    const newPages = pages.map(p => p.id === pageId ? {
       ...p,
       criteria: p.criteria.filter(c => c.id !== criterionId)
-    } : p));
-    triggerFeedback('success', 'تم حذف المعيار بنجاح.');
+    } : p);
+    setPages(newPages);
+    safeLocalStorageSet('portfolio_pages_v1', newPages);
+    api.savePages(newPages);
+    triggerFeedback('success', 'تم حذف المعيار وتحديث قاعدة البيانات بنجاح.');
   };
 
-  const handleAddAttachmentForPage = (pageId: number, name: string, type: AttachmentType, url: string, size?: string) => {
+  const handleAddAttachmentForPage = (pageId: number, name: string, type: AttachmentType, url: string, size?: string, criterionId?: string) => {
     const newAtt: Attachment = {
       id: `att-${Date.now()}`,
+      criterionId: criterionId,
       name: name.trim(),
       type: type,
       url: url.trim() || '#',
       date: new Date().toISOString().split('T')[0],
       size: size || (type === 'file' ? '2.1 MB' : undefined)
     };
-    setPages(prev => prev.map(p => p.id === pageId ? { ...p, attachments: [...p.attachments, newAtt] } : p));
-    triggerFeedback('success', 'تمت إضافة المرفق بنجاح للصفحة المحددة.');
+    setPages(prev => prev.map(p => {
+      if (p.id === pageId) {
+        const updatedCriteria = criterionId
+          ? p.criteria.map(c => c.id === criterionId ? { ...c, isMet: true } : c)
+          : p.criteria;
+        return {
+          ...p,
+          criteria: updatedCriteria,
+          attachments: [...p.attachments, newAtt]
+        };
+      }
+      return p;
+    }));
+    triggerFeedback('success', 'تمت إضافة المرفق وربطه بنجاح.');
   };
 
   const handleDeleteAttachmentForPage = (pageId: number, attachmentId: string) => {
-    setPages(prev => prev.map(p => p.id === pageId ? {
+    const newPages = pages.map(p => p.id === pageId ? {
       ...p,
       attachments: p.attachments.filter(a => a.id !== attachmentId)
-    } : p));
-    triggerFeedback('success', 'تم حذف المرفق بنجاح.');
+    } : p);
+    setPages(newPages);
+    safeLocalStorageSet('portfolio_pages_v1', newPages);
+    api.savePages(newPages);
+    triggerFeedback('success', 'تم حذف المرفق وتحديث قاعدة البيانات بنجاح.');
   };
 
   return (
@@ -962,28 +1025,6 @@ export default function App() {
                 <span>كلمة مرور الشواهد</span>
               </button>
             )}
-
-            {/* Supabase Cloud Connection Status Badge */}
-            <button
-              onClick={() => {
-                if (!isAdminMode) {
-                  openAdminLoginModal(() => {
-                    setIsControlPanelOpen(true);
-                  });
-                } else {
-                  setIsControlPanelOpen(true);
-                }
-              }}
-              title="حالة الربط مع قاعدة بيانات Supabase السحابية"
-              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition-colors cursor-pointer border shadow-xs ${
-                supabaseUrl && supabaseAnonKey
-                  ? 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100'
-                  : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100 animate-pulse'
-              }`}
-            >
-              <LucideIcon name="Database" size={14} className={supabaseUrl && supabaseAnonKey ? "text-emerald-700" : "text-amber-700"} />
-              <span>{supabaseUrl && supabaseAnonKey ? 'قاعدة Supabase: مهيأة' : 'ربط قاعدة Supabase'}</span>
-            </button>
 
             {/* Central Control Panel Button Toggle */}
             <button
@@ -1235,6 +1276,7 @@ export default function App() {
                 config={config} 
                 isAdminMode={isAdminMode}
                 onSelectPage={(id) => setActiveTabId(id)}
+                onAddNewPageToSection={(secId) => handleAddNewPage(secId)}
                 onToggleControlPanel={() => {
                   if (!isAdminMode) {
                     openAdminLoginModal(() => {
@@ -1398,48 +1440,118 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="space-y-2.5">
-                          {activePage.criteria.map((crit) => (
-                            <div 
-                              key={crit.id}
-                              className={`flex items-start justify-between gap-4 p-4 rounded-xl border transition-all ${
-                                crit.isMet 
-                                ? 'bg-emerald-50/40 border-emerald-100/80 text-emerald-950' 
-                                : 'bg-slate-50/50 border-slate-200/60 text-slate-700'
-                              }`}
-                            >
-                              <div className="flex items-start gap-3 w-full">
-                                <button
-                                  onClick={() => handleToggleCriterion(crit.id)}
-                                  disabled={!isAdminMode}
-                                  className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                                    isAdminMode ? 'cursor-pointer' : 'cursor-default'
-                                  } ${
-                                    crit.isMet 
-                                    ? 'bg-emerald-600 border-emerald-600 text-white' 
-                                    : 'bg-white border-slate-300 text-slate-400 hover:border-slate-400'
-                                  }`}
-                                >
-                                  {crit.isMet && <LucideIcon name="Check" size={13} />}
-                                </button>
-                                <span className={`text-xs md:text-sm leading-relaxed ${crit.isMet ? 'line-through text-slate-500' : 'text-slate-800 font-medium'}`}>
-                                  {crit.text}
-                                </span>
-                              </div>
+                          {activePage.criteria.map((crit) => {
+                            const critAttachments = activePage.attachments.filter(a => a.criterionId === crit.id);
+                            return (
+                              <div 
+                                key={crit.id}
+                                className={`p-4 rounded-xl border transition-all space-y-2.5 ${
+                                  crit.isMet 
+                                  ? 'bg-emerald-50/40 border-emerald-100/80 text-emerald-950' 
+                                  : 'bg-slate-50/50 border-slate-200/60 text-slate-700'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="flex items-start gap-3 w-full">
+                                    <button
+                                      onClick={() => handleToggleCriterion(crit.id)}
+                                      disabled={!isAdminMode}
+                                      className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                                        isAdminMode ? 'cursor-pointer' : 'cursor-default'
+                                      } ${
+                                        crit.isMet 
+                                        ? 'bg-emerald-600 border-emerald-600 text-white' 
+                                        : 'bg-white border-slate-300 text-slate-400 hover:border-slate-400'
+                                      }`}
+                                    >
+                                      {crit.isMet && <LucideIcon name="Check" size={13} />}
+                                    </button>
+                                    <span className={`text-xs md:text-sm leading-relaxed ${crit.isMet ? 'line-through text-slate-500' : 'text-slate-800 font-medium'}`}>
+                                      {crit.text}
+                                    </span>
+                                  </div>
 
-                              {isAdminMode && (
-                                <button
-                                  onClick={() => handleDeleteCriterion(crit.id)}
-                                  className="text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer shrink-0 flex items-center gap-1.5 text-xs font-bold"
-                                  title="حذف هذا البند أو المعيار من القائمة"
-                                >
-                                  <LucideIcon name="Trash2" size={13} className="text-rose-600" />
-                                  <span>حذف البند</span>
-                                </button>
-                              )}
-                            </div>
-                          ))}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {isAdminMode && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveUploadCriterionId(crit.id);
+                                            criterionFileUploadInputRef.current?.click();
+                                          }}
+                                          className="inline-flex items-center gap-1 text-[11px] font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                                          title="رفع شاهد ومستند مخصص لهذا المعيار مباشرة"
+                                        >
+                                          <LucideIcon name="Paperclip" size={12} className="text-teal-700" />
+                                          <span>إرفاق شاهد</span>
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteCriterion(crit.id)}
+                                          className="text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 px-2 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-xs font-bold"
+                                          title="حذف هذا البند أو المعيار من القائمة"
+                                        >
+                                          <LucideIcon name="Trash2" size={12} className="text-rose-600" />
+                                          <span>حذف</span>
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Display attachments attached to this specific criterion */}
+                                {critAttachments.length > 0 && (
+                                  <div className="pt-2 border-t border-slate-200/60 flex flex-wrap gap-2 items-center">
+                                    <span className="text-[10px] font-black text-slate-500 flex items-center gap-1">
+                                      <LucideIcon name="Paperclip" size={11} className="text-madrasati-teal" />
+                                      الشواهد المرتبطة ({critAttachments.length}):
+                                    </span>
+                                    {critAttachments.map(att => (
+                                      <div 
+                                        key={att.id}
+                                        className="inline-flex items-center gap-1.5 bg-white border border-slate-200/90 rounded-lg px-2.5 py-1 text-xs shadow-3xs hover:border-madrasati-teal transition-all"
+                                      >
+                                        <span className="font-bold text-slate-800 text-[11px] truncate max-w-[180px]">
+                                          {att.name}
+                                        </span>
+                                        {att.size && <span className="text-[9px] text-slate-400 font-sans">({att.size})</span>}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenAttachment(att)}
+                                          className="text-madrasati-teal hover:underline text-[10px] font-black flex items-center gap-0.5 cursor-pointer ml-1"
+                                          title="عرض الشاهد"
+                                        >
+                                          <LucideIcon name="ExternalLink" size={10} />
+                                          <span>عرض</span>
+                                        </button>
+                                        {isAdminMode && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteAttachment(att.id)}
+                                            className="text-slate-400 hover:text-rose-600 p-0.5 rounded cursor-pointer"
+                                            title="حذف هذا الشاهد"
+                                          >
+                                            <LucideIcon name="Trash2" size={11} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
+
+                      {/* Hidden File Input for criterion-specific upload */}
+                      <input
+                        type="file"
+                        ref={criterionFileUploadInputRef}
+                        className="hidden"
+                        onChange={handleCriterionFileInputChange}
+                        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                      />
 
                       {/* Add standard custom criterion form */}
                       {isAdminMode && (
@@ -1568,7 +1680,7 @@ export default function App() {
                                 value={newAttachmentName}
                                 onChange={(e) => setNewAttachmentName(e.target.value)}
                                 placeholder="مثال: الخطة التشغيلية السنوية"
-                                className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
+                                className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal font-medium"
                               />
                             </div>
 
@@ -1577,7 +1689,7 @@ export default function App() {
                               <select
                                 value={newAttachmentType}
                                 onChange={(e) => setNewAttachmentType(e.target.value as AttachmentType)}
-                                className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
+                                className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal font-medium"
                               >
                                 <option value="file">ملف مستند (PDF, Word, Excel)</option>
                                 <option value="image">صورة وإثبات مرئي</option>
@@ -1601,6 +1713,28 @@ export default function App() {
                                 className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal disabled:bg-slate-100 text-slate-700"
                               />
                             </div>
+
+                            {/* Criterion selector dropdown */}
+                            {activePage.criteria.length > 0 && (
+                              <div className="space-y-1 md:col-span-3">
+                                <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1">
+                                  <LucideIcon name="CheckSquare" size={11} className="text-madrasati-teal" />
+                                  <span>ربط المرفق بمعيار محدد من بنود هذه الصفحة (اختياري - يظهر الشاهد تحت المعيار مباشرة):</span>
+                                </label>
+                                <select
+                                  value={selectedCriterionIdForNewAttachment}
+                                  onChange={(e) => setSelectedCriterionIdForNewAttachment(e.target.value)}
+                                  className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal font-medium text-slate-800"
+                                >
+                                  <option value="">-- شاهد عام لكامل الصفحة (غير مخصص لمعيار واحد) --</option>
+                                  {activePage.criteria.map((c, i) => (
+                                    <option key={c.id} value={c.id}>
+                                      معيار {i + 1}: {c.text.substring(0, 60)}{c.text.length > 60 ? '...' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex justify-end gap-2 pt-1 border-t border-slate-200/50">
@@ -1671,71 +1805,82 @@ export default function App() {
                               localizedTypeName = "رابط إلكتروني";
                             }
 
+                            const linkedCrit = activePage.criteria.find(c => c.id === att.criterionId);
+
                             return (
                               <div 
                                 key={att.id}
-                                className="bg-white border border-slate-200/60 hover:border-slate-300 rounded-xl p-3.5 flex items-center justify-between gap-3 shadow-3xs hover:shadow-2xs transition-all cursor-pointer group"
+                                className="bg-white border border-slate-200/60 hover:border-slate-300 rounded-xl p-3.5 flex flex-col justify-between gap-2.5 shadow-3xs hover:shadow-2xs transition-all cursor-pointer group"
                                 onClick={() => handleOpenAttachment(att)}
                               >
-                                <div className="flex items-center gap-3 overflow-hidden">
-                                  <div className={`w-9 h-9 rounded-lg border flex items-center justify-center shrink-0 ${iconBg}`}>
-                                    <LucideIcon name={iconName} size={15} />
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex items-center gap-3 overflow-hidden">
+                                    <div className={`w-9 h-9 rounded-lg border flex items-center justify-center shrink-0 ${iconBg}`}>
+                                      <LucideIcon name={iconName} size={15} />
+                                    </div>
+                                    <div className="text-right overflow-hidden space-y-0.5">
+                                      <h5 className="font-bold text-slate-800 group-hover:text-madrasati-teal text-xs truncate max-w-[180px] sm:max-w-[280px] transition-colors">
+                                        {att.name}
+                                      </h5>
+                                      <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                                        <span>{localizedTypeName}</span>
+                                        <span>•</span>
+                                        <span>{att.date}</span>
+                                        {att.size && (
+                                          <>
+                                            <span>•</span>
+                                            <span>{att.size}</span>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
                                   </div>
-                                  <div className="text-right overflow-hidden space-y-0.5">
-                                    <h5 className="font-bold text-slate-800 group-hover:text-madrasati-teal text-xs truncate max-w-[180px] sm:max-w-[280px] transition-colors">
-                                      {att.name}
-                                    </h5>
-                                    <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                                      <span>{localizedTypeName}</span>
-                                      <span>•</span>
-                                      <span>{att.date}</span>
-                                      {att.size && (
+
+                                  <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenAttachment(att)}
+                                      className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold transition-all flex items-center gap-1 cursor-pointer ${
+                                        isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession
+                                          ? 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                                          : 'bg-teal-50 text-teal-900 border border-teal-200 hover:bg-teal-100'
+                                      }`}
+                                      title={
+                                        isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession
+                                          ? 'الشاهد مؤمن بكلمة مرور - انقر لإدخال كلمة المرور للاطلاع عليه'
+                                          : 'عرض الشاهد المرفق'
+                                      }
+                                    >
+                                      {isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession ? (
                                         <>
-                                          <span>•</span>
-                                          <span>{att.size}</span>
+                                          <LucideIcon name="Lock" size={12} className="text-amber-700" />
+                                          <span>عرض</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <LucideIcon name="ExternalLink" size={12} className="text-teal-700" />
+                                          <span>عرض</span>
                                         </>
                                       )}
-                                    </div>
+                                    </button>
+                                    {isAdminMode && (
+                                      <button
+                                        onClick={() => handleDeleteAttachment(att.id)}
+                                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                        title="حذف المستند"
+                                      >
+                                        <LucideIcon name="Trash2" size={13} />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenAttachment(att)}
-                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold transition-all flex items-center gap-1 cursor-pointer ${
-                                      isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession
-                                        ? 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
-                                        : 'bg-teal-50 text-teal-900 border border-teal-200 hover:bg-teal-100'
-                                    }`}
-                                    title={
-                                      isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession
-                                        ? 'الشاهد مؤمن بكلمة مرور - انقر لإدخال كلمة المرور للاطلاع عليه'
-                                        : 'عرض الشاهد المرفق'
-                                    }
-                                  >
-                                    {isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession ? (
-                                      <>
-                                        <LucideIcon name="Lock" size={12} className="text-amber-700" />
-                                        <span>عرض الشاهد</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <LucideIcon name="ExternalLink" size={12} className="text-teal-700" />
-                                        <span>عرض الشاهد</span>
-                                      </>
-                                    )}
-                                  </button>
-                                  {isAdminMode && (
-                                    <button
-                                      onClick={() => handleDeleteAttachment(att.id)}
-                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                      title="حذف المستند"
-                                    >
-                                      <LucideIcon name="Trash2" size={13} />
-                                    </button>
-                                  )}
-                                </div>
+                                {linkedCrit && (
+                                  <div className="pt-1.5 border-t border-slate-100 flex items-center gap-1 text-[10px] text-teal-900 bg-teal-50/70 border border-teal-100 rounded-md px-2 py-0.5 font-bold">
+                                    <LucideIcon name="CheckCircle2" size={10} className="text-teal-700 shrink-0" />
+                                    <span className="truncate">مرتبط بالمعيار: {linkedCrit.text}</span>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
