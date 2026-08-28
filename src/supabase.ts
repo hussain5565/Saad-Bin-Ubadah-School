@@ -52,18 +52,15 @@ export function getSupabaseCredentials() {
   let url = (urlFromParams || storedUrl || envUrl || DEFAULT_SUPABASE_URL || '').trim();
   let anonKey = (keyFromParams || storedKey || envKey || DEFAULT_SUPABASE_ANON_KEY || '').trim();
 
-  // Clean trailing slashes from URL
-  if (url.endsWith('/')) {
-    url = url.slice(0, -1);
-  }
+  // Clean trailing /rest/v1 or slashes from URL so Supabase client works perfectly
+  url = url.replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
 
   return { url, anonKey, isConfigured: Boolean(url && anonKey) };
 }
 
 export function saveSupabaseCredentials(url: string, anonKey: string) {
   if (typeof window !== 'undefined') {
-    let cleanUrl = url.trim();
-    if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
+    let cleanUrl = url.trim().replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
     const cleanKey = anonKey.trim();
 
     localStorage.setItem('portfolio_supabase_url', cleanUrl);

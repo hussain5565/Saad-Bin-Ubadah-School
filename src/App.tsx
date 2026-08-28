@@ -2361,6 +2361,86 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Manual Cloud Sync Action Strip */}
+                  <div className="p-3 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-300 rounded-xl space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h6 className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
+                          <LucideIcon name="CloudUpload" size={16} className="text-emerald-700" />
+                          <span>المزامنة السحابية الفورية (رفع أو سحب البيانات)</span>
+                        </h6>
+                        <p className="text-[10px] text-slate-600 font-medium">
+                          اضغط على "رفع ومزامنة البيانات" لحفظ الصورة والمعايير الحالية إلى السحابة لتظهر فوراً على جميع الأجهزة الأخرى.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isManualSyncing}
+                          onClick={async () => {
+                            try {
+                              setIsManualSyncing(true);
+                              saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
+                              const res = await api.saveAll({
+                                config,
+                                pages,
+                                sections,
+                                settings: {
+                                  adminUsername,
+                                  adminPassword,
+                                  attachmentsPassword,
+                                  isAttachmentsLockEnabled,
+                                },
+                              });
+                              if (res.success) {
+                                triggerFeedback('success', 'تم رفع ومزامنة كامل البيانات (الصورة والمعايير والأقسام) إلى Supabase بنجاح! ستظهر الآن على جميع الأجهزة.');
+                              } else {
+                                triggerFeedback('error', `تعذر الرفع: ${res.error || 'تأكد من إنشاء جدول Supabase'}`);
+                              }
+                            } catch (e: any) {
+                              triggerFeedback('error', 'حدث خطأ أثناء الرفع السحابي.');
+                            } finally {
+                              setIsManualSyncing(false);
+                            }
+                          }}
+                          className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                        >
+                          <LucideIcon name={isManualSyncing ? "RefreshCw" : "UploadCloud"} size={14} className={isManualSyncing ? "animate-spin" : ""} />
+                          <span>{isManualSyncing ? 'جارِ الرفع...' : 'رفع ومزامنة البيانات للسحابة الآن'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isManualSyncing}
+                          onClick={async () => {
+                            try {
+                              setIsManualSyncing(true);
+                              saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
+                              const cloudData = await api.loadAll();
+                              if (cloudData && (cloudData.config || (cloudData.pages && cloudData.pages.length > 0))) {
+                                if (cloudData.config) setConfig(cloudData.config);
+                                if (cloudData.pages) setPages(cloudData.pages);
+                                if (cloudData.sections) setSections(cloudData.sections);
+                                triggerFeedback('success', 'تم سحب وتحديث أحدث البيانات من قاعدة بيانات Supabase بنجاح!');
+                              } else {
+                                triggerFeedback('error', 'لم يتم العثور على بيانات سحابية محفوظة بعد في هذا المشروع.');
+                              }
+                            } catch (e: any) {
+                              triggerFeedback('error', 'حدث خطأ أثناء جلب البيانات.');
+                            } finally {
+                              setIsManualSyncing(false);
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs disabled:opacity-50"
+                        >
+                          <LucideIcon name="DownloadCloud" size={14} />
+                          <span>سحب وتحديث من السحابة</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Action buttons & test status */}
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/50">
                     <div className="flex items-center gap-2">
