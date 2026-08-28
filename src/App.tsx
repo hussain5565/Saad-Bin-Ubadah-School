@@ -4,9 +4,10 @@ import { PortfolioPage, PortfolioConfig, Criterion, Attachment, AttachmentType, 
 import { LucideIcon } from './components/LucideIcon';
 import { DashboardStats } from './components/DashboardStats';
 import { ControlPanelPageDetails } from './components/ControlPanelPageDetails';
+import { AttachmentViewerModal } from './components/AttachmentViewerModal';
 import { api } from './api';
 import { supabaseDb, getSupabaseCredentials, saveSupabaseCredentials, SUPABASE_SQL_SCHEMA, generateCrossDeviceSyncLink } from './supabase';
-import { compressImageFile } from './utils/imageUtils';
+import { compressImageFile, processUploadedFile } from './utils/imageUtils';
 
 // Helper for safe storage execution to avoid QuotaExceededError crashes
 const safeLocalStorageSet = (key: string, value: any) => {
@@ -239,6 +240,13 @@ export default function App() {
 
   const [isAttachmentsUnlockedSession, setIsAttachmentsUnlockedSession] = useState<boolean>(false);
   const [showPasswordInControlPanel, setShowPasswordInControlPanel] = useState<boolean>(false);
+  const [activeAttachmentPreview, setActiveAttachmentPreview] = useState<Attachment | null>(null);
+
+  // File upload refs
+  const fileUploadInputRef = useRef<HTMLInputElement>(null);
+  const formFileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState<boolean>(false);
+  const [newAttachmentSize, setNewAttachmentSize] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     localStorage.setItem('portfolio_attachments_password_v2', attachmentsPassword);
@@ -248,20 +256,36 @@ export default function App() {
     localStorage.setItem('portfolio_attachments_lock_enabled_v2', String(isAttachmentsLockEnabled));
   }, [isAttachmentsLockEnabled]);
 
-  const handleOpenAttachment = (attUrl: string, attName: string) => {
-    if (!attUrl || attUrl === '#') {
-      triggerFeedback('error', 'رابط الشاهد غير متوفر أو غير صالحة.');
-      return;
+  const handleOpenAttachment = (item: Attachment | string, nameParam?: string) => {
+    let targetAtt: Attachment;
+    if (typeof item === 'string') {
+      targetAtt = {
+        id: `temp-${Date.now()}`,
+        name: nameParam || 'مستند الشاهد',
+        type: 'file',
+        url: item,
+        date: new Date().toISOString().split('T')[0],
+      };
+    } else {
+      targetAtt = item;
     }
 
+    const proceedToView = () => {
+      if (targetAtt.url && (targetAtt.url.startsWith('http://') || targetAtt.url.startsWith('https://'))) {
+        window.open(targetAtt.url, '_blank', 'noopener,noreferrer');
+      } else {
+        setActiveAttachmentPreview(targetAtt);
+      }
+    };
+
     if (!isAttachmentsLockEnabled || isAdminMode || isAttachmentsUnlockedSession) {
-      window.open(attUrl, '_blank');
+      proceedToView();
       return;
     }
 
     openPrompt(
       '🔐 الشواهد والمرفقات مؤمنة بكلمة مرور',
-      `هذا الشاهد [${attName}] محمي بكلمة مرور من حساب المدير. يرجى إدخال كلمة المرور للاطلاع عليه:`,
+      `هذا الشاهد [${targetAtt.name}] محمي بكلمة مرور من حساب المدير. يرجى إدخال كلمة المرور للاطلاع عليه:`,
       'أدخل كلمة مرور الشواهد...',
       (inputPassword) => {
         const cleanInput = normalizeDigits(inputPassword);
@@ -269,7 +293,7 @@ export default function App() {
         if (cleanInput === cleanTarget || cleanInput === '1234' || cleanInput === '123456') {
           setIsAttachmentsUnlockedSession(true);
           triggerFeedback('success', 'تم التحقق بنجاح من كلمة المرور وتأكيد فتح الشاهد.');
-          window.open(attUrl, '_blank');
+          proceedToView();
         } else {
           triggerFeedback('error', 'كلمة مرور الشواهد غير صحيحة. يرجى التواصل مع إدارة المدرسة.');
         }
@@ -581,7 +605,7 @@ export default function App() {
       type: newAttachmentType,
       url: newAttachmentUrl.trim() || '#',
       date: new Date().toISOString().split('T')[0],
-      size: newAttachmentType === 'file' ? '2.1 MB' : undefined
+      size: newAttachmentSize || (newAttachmentType === 'file' ? '2.1 MB' : undefined)
     };
 
     setPages(prev => prev.map(p => {
@@ -596,6 +620,7 @@ export default function App() {
 
     setNewAttachmentName('');
     setNewAttachmentUrl('');
+    setNewAttachmentSize(undefined);
     setShowAddAttachment(false);
     triggerFeedback('success', 'تم رفع وإضافة المرفق بنجاح لملف الشواهد.');
   };
@@ -614,54 +639,86 @@ export default function App() {
     triggerFeedback('success', 'تم حذف المرفق.');
   };
 
-  // Dynamic file upload simulation for drag-and-drop
+  const processAndAddFiles = async (fileList: FileList | File[]) => {
+    if (!activePage) return;
+    if (!isAdminMode) {
+      triggerFeedback('error', 'عذراً! لا يمكن رفع الشواهد وسحب الملفات إلا في وضع الإدارة والتعديل (تأكد من رمز المرور).');
+      return;
+    }
+
+    try {
+      setIsUploadingAttachment(true);
+      const newlyAdded: Attachment[] = [];
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const processed = await processUploadedFile(file);
+        newlyAdded.push({
+          id: `att-upload-${Date.now()}-${i}`,
+          name: processed.name,
+          type: processed.type,
+          url: processed.dataUrl,
+          date: new Date().toISOString().split('T')[0],
+          size: processed.sizeString,
+        });
+      }
+
+      if (newlyAdded.length > 0) {
+        setPages(prev => prev.map(p => {
+          if (p.id === activePage.id) {
+            return {
+              ...p,
+              attachments: [...p.attachments, ...newlyAdded]
+            };
+          }
+          return p;
+        }));
+        triggerFeedback('success', `تم رفع وإضافة ${newlyAdded.length} مرفقات بنجاح!`);
+      }
+    } catch (err) {
+      console.error('Error uploading files:', err);
+      triggerFeedback('error', 'حدث خطأ أثناء معالجة ورفع الملفات.');
+    } finally {
+      setIsUploadingAttachment(false);
+      if (fileUploadInputRef.current) fileUploadInputRef.current.value = '';
+    }
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    if (!activePage) return;
-    if (!isAdminMode) {
-      triggerFeedback('error', 'عذراً! لا يمكن رفع الشواهد وسحب الملفات إلا في وضع الإدارة والتعديل (تأكد من رمز المرور).');
-      return;
-    }
-    
     const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const newlyAdded: Attachment[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const readableSize = `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-        const isImg = file.type.includes('image');
-        let fileUrl = '#';
-        if (isImg) {
-          try {
-            fileUrl = await compressImageFile(file, 800, 800, 0.85);
-          } catch (e) {
-            fileUrl = '#';
-          }
-        }
-        newlyAdded.push({
-          id: `att-drop-${Date.now()}-${i}`,
-          name: file.name,
-          type: isImg ? 'image' : 'file',
-          url: fileUrl,
-          date: new Date().toISOString().split('T')[0],
-          size: readableSize
-        });
-      }
+    if (files && files.length > 0) {
+      await processAndAddFiles(files);
+    }
+  };
 
-      setPages(prev => prev.map(p => {
-        if (p.id === activePage.id) {
-          return {
-            ...p,
-            attachments: [...p.attachments, ...newlyAdded]
-          };
-        }
-        return p;
-      }));
-      triggerFeedback('success', `تم سحب وإضافة ${files.length} مرفقات بنجاح!`);
+  const handleDirectFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      await processAndAddFiles(files);
+    }
+  };
+
+  const handleFormFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    try {
+      setIsUploadingAttachment(true);
+      const file = files[0];
+      const processed = await processUploadedFile(file);
+      setNewAttachmentName(processed.name);
+      setNewAttachmentType(processed.type);
+      setNewAttachmentUrl(processed.dataUrl);
+      setNewAttachmentSize(processed.sizeString);
+    } catch (err) {
+      console.error('Error selecting file in form:', err);
+    } finally {
+      setIsUploadingAttachment(false);
+      if (formFileInputRef.current) formFileInputRef.current.value = '';
     }
   };
 
@@ -791,14 +848,14 @@ export default function App() {
     triggerFeedback('success', 'تم حذف المعيار بنجاح.');
   };
 
-  const handleAddAttachmentForPage = (pageId: number, name: string, type: AttachmentType, url: string) => {
+  const handleAddAttachmentForPage = (pageId: number, name: string, type: AttachmentType, url: string, size?: string) => {
     const newAtt: Attachment = {
       id: `att-${Date.now()}`,
       name: name.trim(),
       type: type,
       url: url.trim() || '#',
       date: new Date().toISOString().split('T')[0],
-      size: type === 'file' ? '2.1 MB' : undefined
+      size: size || (type === 'file' ? '2.1 MB' : undefined)
     };
     setPages(prev => prev.map(p => p.id === pageId ? { ...p, attachments: [...p.attachments, newAtt] } : p));
     triggerFeedback('success', 'تمت إضافة المرفق بنجاح للصفحة المحددة.');
@@ -1437,6 +1494,17 @@ export default function App() {
                           {isAdminMode && (
                             <>
                               <button
+                                type="button"
+                                onClick={() => fileUploadInputRef.current?.click()}
+                                disabled={isUploadingAttachment}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-900 rounded-xl text-xs font-black transition-all cursor-pointer shadow-3xs"
+                                title="رفع ملف أو صورة أو مستند مباشرة من جهازك"
+                              >
+                                <LucideIcon name="UploadCloud" size={13} className="text-teal-700" />
+                                <span>{isUploadingAttachment ? 'جارِ المعالجة...' : 'رفع ملف / صورة من الجهاز'}</span>
+                              </button>
+
+                              <button
                                 onClick={handlePromptChangeAttachmentsPassword}
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-xl text-xs font-black transition-all cursor-pointer shadow-3xs"
                                 title="تعديل وتعيين كلمة مرور جميع الشواهد"
@@ -1457,10 +1525,39 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* Hidden File Inputs for Direct & Drag-and-Drop Upload */}
+                      <input
+                        type="file"
+                        ref={fileUploadInputRef}
+                        multiple
+                        className="hidden"
+                        onChange={handleDirectFileInputChange}
+                        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                      />
+
+                      <input
+                        type="file"
+                        ref={formFileInputRef}
+                        className="hidden"
+                        onChange={handleFormFileSelected}
+                        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+                      />
+
                       {/* Expanded manual add attachment section */}
                       {showAddAttachment && (
                         <form onSubmit={handleAddAttachment} className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-                          <h4 className="text-xs font-bold text-slate-950">تفاصيل المرفق والشاهد الجديد</h4>
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-bold text-slate-950">تفاصيل المرفق والشاهد الجديد</h4>
+                            <button
+                              type="button"
+                              onClick={() => formFileInputRef.current?.click()}
+                              disabled={isUploadingAttachment}
+                              className="text-[11px] font-bold text-madrasati-teal bg-white border border-madrasati-teal/30 hover:bg-madrasati-teal-bg/40 px-2.5 py-1 rounded-lg flex items-center gap-1.5 cursor-pointer shadow-3xs"
+                            >
+                              <LucideIcon name="UploadCloud" size={12} />
+                              <span>{isUploadingAttachment ? 'جارِ القراءة...' : 'اختيار ملف من جهازك للتعبئة التلقائية'}</span>
+                            </button>
+                          </div>
                           
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="space-y-1">
@@ -1483,20 +1580,25 @@ export default function App() {
                                 className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
                               >
                                 <option value="file">ملف مستند (PDF, Word, Excel)</option>
-                                <option value="url">رابط خارجي (موقع إلكتروني)</option>
-                                <option value="drive">مجلد سحابي (Google Drive, OneDrive)</option>
                                 <option value="image">صورة وإثبات مرئي</option>
+                                <option value="drive">مجلد سحابي (Google Drive, OneDrive)</option>
+                                <option value="url">رابط خارجي (موقع إلكتروني)</option>
                               </select>
                             </div>
 
                             <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-500">الرابط الرقمي (اختياري)</label>
+                              <label className="text-[10px] font-bold text-slate-500">
+                                {newAttachmentUrl && newAttachmentUrl.startsWith('data:') 
+                                  ? `ملف محلي مرفوع (${newAttachmentSize || 'جاهز'})`
+                                  : 'الرابط الرقمي السحابي (اختياري)'}
+                              </label>
                               <input
                                 type="text"
-                                value={newAttachmentUrl}
+                                value={newAttachmentUrl && newAttachmentUrl.startsWith('data:') ? `[تم استيراد بيانات الملف محلياً بنجاح]` : newAttachmentUrl}
+                                disabled={Boolean(newAttachmentUrl && newAttachmentUrl.startsWith('data:'))}
                                 onChange={(e) => setNewAttachmentUrl(e.target.value)}
                                 placeholder="https://example.com/file"
-                                className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
+                                className="w-full text-xs px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-madrasati-teal disabled:bg-slate-100 text-slate-700"
                               />
                             </div>
                           </div>
@@ -1504,7 +1606,8 @@ export default function App() {
                           <div className="flex justify-end gap-2 pt-1 border-t border-slate-200/50">
                             <button
                               type="submit"
-                              className="px-4 py-2 bg-madrasati-teal text-white font-black rounded-xl text-xs hover:bg-opacity-90 cursor-pointer"
+                              disabled={isUploadingAttachment}
+                              className="px-4 py-2 bg-madrasati-teal text-white font-black rounded-xl text-xs hover:bg-opacity-90 cursor-pointer disabled:opacity-50"
                             >
                               إضافة الشاهد وتصنيفه
                             </button>
@@ -1524,17 +1627,18 @@ export default function App() {
                         <div 
                           onDragOver={handleDragOver}
                           onDrop={handleDrop}
-                          className="border-2 border-dashed border-madrasati-teal/30 bg-madrasati-teal-bg/15 rounded-2xl p-6 text-center hover:bg-madrasati-teal-bg/25 transition-colors pointer-device duration-200"
+                          onClick={() => fileUploadInputRef.current?.click()}
+                          className="border-2 border-dashed border-madrasati-teal/30 bg-madrasati-teal-bg/15 rounded-2xl p-6 text-center hover:bg-madrasati-teal-bg/25 transition-colors cursor-pointer group"
                         >
                           <div className="max-w-md mx-auto space-y-2">
-                            <div className="w-10 h-10 rounded-full bg-madrasati-teal-bg border border-madrasati-teal/20 flex items-center justify-center text-madrasati-teal mx-auto">
+                            <div className="w-10 h-10 rounded-full bg-madrasati-teal-bg border border-madrasati-teal/20 flex items-center justify-center text-madrasati-teal mx-auto group-hover:scale-110 transition-transform">
                               <LucideIcon name="Upload" size={18} />
                             </div>
                             <div className="text-xs">
-                              <span className="font-bold text-madrasati-teal">اسحب الشواهد والملفات الرقمية وأفلتها هنا مباشرة</span>
-                              <span className="text-slate-500 font-bold"> أو اختر الطريقة المناسبة لتصنيف الشواهد</span>
+                              <span className="font-bold text-madrasati-teal">اسحب الشواهد والملفات الرقمية وأفلتها هنا مباشرة أو انقر للاختيار</span>
+                              <span className="text-slate-500 font-bold"> من جهازك</span>
                             </div>
-                            <p className="text-[10px] text-slate-400">تدعم هذه المنطقة الرفع والتنسيق الديناميكي لملفات المدرسة</p>
+                            <p className="text-[10px] text-slate-400">يدعم الصور والمستندات (PDF, Word, Excel, PowerPoint) بجميع الأحجام</p>
                           </div>
                         </div>
                       )}
@@ -1571,7 +1675,7 @@ export default function App() {
                               <div 
                                 key={att.id}
                                 className="bg-white border border-slate-200/60 hover:border-slate-300 rounded-xl p-3.5 flex items-center justify-between gap-3 shadow-3xs hover:shadow-2xs transition-all cursor-pointer group"
-                                onClick={() => handleOpenAttachment(att.url, att.name)}
+                                onClick={() => handleOpenAttachment(att)}
                               >
                                 <div className="flex items-center gap-3 overflow-hidden">
                                   <div className={`w-9 h-9 rounded-lg border flex items-center justify-center shrink-0 ${iconBg}`}>
@@ -1598,7 +1702,7 @@ export default function App() {
                                 <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                                   <button
                                     type="button"
-                                    onClick={() => handleOpenAttachment(att.url, att.name)}
+                                    onClick={() => handleOpenAttachment(att)}
                                     className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold transition-all flex items-center gap-1 cursor-pointer ${
                                       isAttachmentsLockEnabled && !isAdminMode && !isAttachmentsUnlockedSession
                                         ? 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
@@ -2228,333 +2332,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Box 5: Supabase Cloud Database Sync & Configuration */}
-              <div className="space-y-3 pt-2">
-                <hr className="border-slate-100" />
-                <h4 className="font-bold text-slate-900 text-xs flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-                    خامساً: الربط مع قاعدة بيانات Supabase (المزامنة السحابية الشاملة)
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
-                    حفظ سحابي نشط
-                  </span>
-                </h4>
-
-                <div className="p-4 bg-gradient-to-br from-emerald-50/70 to-teal-50/70 border border-emerald-200/80 rounded-2xl space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                        <LucideIcon name="Database" size={18} />
-                      </div>
-                      <div>
-                        <h5 className="font-extrabold text-xs text-slate-900">مزامنة البيانات بين جميع الأجهزة والمتصفحات</h5>
-                        <p className="text-[10px] text-slate-600 font-medium">
-                          يتم حفظ وتحديث كافة الأقسام والشواهد والإعدادات تلقائياً في Supabase فور التعديل.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsManualSyncing(true);
-                          try {
-                            saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
-                            const cloudData = await api.loadAll();
-                            if (cloudData && (cloudData.config || (cloudData.pages && cloudData.pages.length > 0))) {
-                              if (cloudData.config) setConfig(cloudData.config);
-                              if (cloudData.pages) setPages(cloudData.pages);
-                              if (cloudData.sections) setSections(cloudData.sections);
-                              if (cloudData.settings) {
-                                if (cloudData.settings.adminUsername) setAdminUsername(cloudData.settings.adminUsername);
-                                if (cloudData.settings.adminPassword) setAdminPassword(cloudData.settings.adminPassword);
-                                if (cloudData.settings.attachmentsPassword) setAttachmentsPassword(cloudData.settings.attachmentsPassword);
-                                if (cloudData.settings.isAttachmentsLockEnabled !== undefined) setIsAttachmentsLockEnabled(cloudData.settings.isAttachmentsLockEnabled);
-                              }
-                              triggerFeedback('success', 'تم سحب وتحديث كامل البيانات من Supabase بنجاح!');
-                            } else {
-                              triggerFeedback('error', 'لم يتم العثور على بيانات سابقة في Supabase أو تعذر الجلب.');
-                            }
-                          } catch (e: any) {
-                            triggerFeedback('error', e?.message || 'حدث خطأ أثناء جلب البيانات.');
-                          } finally {
-                            setIsManualSyncing(false);
-                          }
-                        }}
-                        disabled={isManualSyncing}
-                        className="px-3 py-1.5 bg-white border border-teal-600 text-teal-800 hover:bg-teal-50 rounded-xl text-xs font-black transition-colors cursor-pointer shadow-xs flex items-center justify-center gap-1.5 disabled:opacity-50 shrink-0"
-                      >
-                        <LucideIcon name="DownloadCloud" size={14} />
-                        <span>سحب وتحديث من السحابة</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsManualSyncing(true);
-                          try {
-                            saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
-                            const res = await api.saveAll({
-                              config,
-                              pages,
-                              sections,
-                              settings: {
-                                adminUsername,
-                                adminPassword,
-                                attachmentsPassword,
-                                isAttachmentsLockEnabled,
-                              },
-                            });
-                            if (res.success) {
-                              triggerFeedback('success', 'تم رفع ومزامنة كامل بيانات الملف إلى Supabase بنجاح!');
-                            } else {
-                              triggerFeedback('error', res.error || 'تعذر استكمال المزامنة مع Supabase. يرجى التحقق من المفاتيح أو تنفيذ كود SQL.');
-                            }
-                          } catch (e: any) {
-                            triggerFeedback('error', e?.message || 'حدث خطأ أثناء المزامنة.');
-                          } finally {
-                            setIsManualSyncing(false);
-                          }
-                        }}
-                        disabled={isManualSyncing}
-                        className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-black transition-colors cursor-pointer shadow-xs flex items-center justify-center gap-1.5 disabled:opacity-50 shrink-0"
-                      >
-                        <LucideIcon name={isManualSyncing ? "RefreshCw" : "UploadCloud"} size={14} className={isManualSyncing ? "animate-spin" : ""} />
-                        <span>{isManualSyncing ? 'جارِ المزامنة...' : 'مزامنة ورفع البيانات السحابية الآن'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Supabase credentials input fields */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-700 flex items-center justify-between">
-                        <span>رابط مشروع Supabase (Project URL):</span>
-                        <span className="text-[9px] text-slate-400 font-normal">VITE_SUPABASE_URL</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={supabaseUrl}
-                        onChange={(e) => setSupabaseUrl(e.target.value)}
-                        placeholder="https://xyzcompany.supabase.co"
-                        dir="ltr"
-                        className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono text-left"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-700 flex items-center justify-between">
-                        <span>المفتاح العام (anon key / public key):</span>
-                        <span className="text-[9px] text-slate-400 font-normal">VITE_SUPABASE_ANON_KEY</span>
-                      </label>
-                      <input
-                        type="password"
-                        value={supabaseAnonKey}
-                        onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                        dir="ltr"
-                        className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono text-left"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Manual Cloud Sync Action Strip */}
-                  <div className="p-3 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-300 rounded-xl space-y-2">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <h6 className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                          <LucideIcon name="CloudUpload" size={16} className="text-emerald-700" />
-                          <span>المزامنة السحابية الفورية (رفع أو سحب البيانات)</span>
-                        </h6>
-                        <p className="text-[10px] text-slate-600 font-medium">
-                          اضغط على "رفع ومزامنة البيانات" لحفظ الصورة والمعايير الحالية إلى السحابة لتظهر فوراً على جميع الأجهزة الأخرى.
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          disabled={isManualSyncing}
-                          onClick={async () => {
-                            try {
-                              setIsManualSyncing(true);
-                              saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
-                              const res = await api.saveAll({
-                                config,
-                                pages,
-                                sections,
-                                settings: {
-                                  adminUsername,
-                                  adminPassword,
-                                  attachmentsPassword,
-                                  isAttachmentsLockEnabled,
-                                },
-                              });
-                              if (res.success) {
-                                triggerFeedback('success', 'تم رفع ومزامنة كامل البيانات (الصورة والمعايير والأقسام) إلى Supabase بنجاح! ستظهر الآن على جميع الأجهزة.');
-                              } else {
-                                triggerFeedback('error', `تعذر الرفع: ${res.error || 'تأكد من إنشاء جدول Supabase'}`);
-                              }
-                            } catch (e: any) {
-                              triggerFeedback('error', 'حدث خطأ أثناء الرفع السحابي.');
-                            } finally {
-                              setIsManualSyncing(false);
-                            }
-                          }}
-                          className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shadow-sm disabled:opacity-50"
-                        >
-                          <LucideIcon name={isManualSyncing ? "RefreshCw" : "UploadCloud"} size={14} className={isManualSyncing ? "animate-spin" : ""} />
-                          <span>{isManualSyncing ? 'جارِ الرفع...' : 'رفع ومزامنة البيانات للسحابة الآن'}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={isManualSyncing}
-                          onClick={async () => {
-                            try {
-                              setIsManualSyncing(true);
-                              saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
-                              const cloudData = await api.loadAll();
-                              if (cloudData && (cloudData.config || (cloudData.pages && cloudData.pages.length > 0))) {
-                                if (cloudData.config) setConfig(cloudData.config);
-                                if (cloudData.pages) setPages(cloudData.pages);
-                                if (cloudData.sections) setSections(cloudData.sections);
-                                triggerFeedback('success', 'تم سحب وتحديث أحدث البيانات من قاعدة بيانات Supabase بنجاح!');
-                              } else {
-                                triggerFeedback('error', 'لم يتم العثور على بيانات سحابية محفوظة بعد في هذا المشروع.');
-                              }
-                            } catch (e: any) {
-                              triggerFeedback('error', 'حدث خطأ أثناء جلب البيانات.');
-                            } finally {
-                              setIsManualSyncing(false);
-                            }
-                          }}
-                          className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs disabled:opacity-50"
-                        >
-                          <LucideIcon name="DownloadCloud" size={14} />
-                          <span>سحب وتحديث من السحابة</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Action buttons & test status */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/50">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
-                          setSupabaseTestStatus({ isChecking: true });
-                          const res = await supabaseDb.checkConnection();
-                          setSupabaseTestStatus({
-                            isChecking: false,
-                            ok: res.ok,
-                            message: res.message,
-                          });
-                          if (res.ok) {
-                            triggerFeedback('success', res.message);
-                          } else {
-                            triggerFeedback('error', res.message);
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-50 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                      >
-                        <LucideIcon name="Activity" size={13} />
-                        <span>فحص حالة الاتصال بـ Supabase</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setShowSqlDrawer(!showSqlDrawer)}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
-                      >
-                        <LucideIcon name="Code" size={13} />
-                        <span>{showSqlDrawer ? 'إخفاء كود SQL' : 'كود إنشاء جدول Supabase'}</span>
-                      </button>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        saveSupabaseCredentials(supabaseUrl, supabaseAnonKey);
-                        triggerFeedback('success', 'تم حفظ مفاتيح Supabase بنجاح في المتصفح.');
-                      }}
-                      className="px-3 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      حفظ بيانات المفاتيح
-                    </button>
-                  </div>
-
-                  {/* Cross-Device Instant Share & Sync Link */}
-                  <div className="p-3 bg-white border-2 border-emerald-300 rounded-xl space-y-2 shadow-xs">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <h6 className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                          <LucideIcon name="Share2" size={15} className="text-emerald-700" />
-                          <span>رابط المزامنة التلقائية لجميع الأجهزة والجوالات</span>
-                        </h6>
-                        <p className="text-[10px] text-slate-600 font-medium">
-                          انسخ هذا الرابط وافتحه على هاتفك أو أي جهاز آخر لربطه تلقائياً مع السحابة وعرض أحدث الصور والمعايير والشواهد.
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const link = generateCrossDeviceSyncLink();
-                          navigator.clipboard.writeText(link);
-                          triggerFeedback('success', 'تم نسخ رابط المزامنة لجميع الأجهزة بنجاح! افتحه في أي جهاز آخر ليتصل فوراً.');
-                        }}
-                        className="px-3 py-1.5 bg-emerald-800 hover:bg-emerald-900 text-white rounded-lg text-xs font-black transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-xs shrink-0"
-                      >
-                        <LucideIcon name="Copy" size={14} />
-                        <span>نسخ رابط المزامنة للأجهزة الأخرى</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Test connection alert message if tested */}
-                  {supabaseTestStatus && (
-                    <div className={`p-2.5 rounded-xl text-xs font-bold border flex items-center gap-2 animate-fade-in ${
-                      supabaseTestStatus.ok ? 'bg-emerald-100 border-emerald-300 text-emerald-900' : 'bg-rose-100 border-rose-300 text-rose-900'
-                    }`}>
-                      <LucideIcon name={supabaseTestStatus.ok ? "CheckCircle2" : "AlertTriangle"} size={16} className="shrink-0" />
-                      <span>{supabaseTestStatus.message}</span>
-                    </div>
-                  )}
-
-                  {/* SQL Schema code snippet box */}
-                  {showSqlDrawer && (
-                    <div className="p-3 bg-slate-900 text-slate-100 rounded-xl space-y-2 border border-slate-800 animate-fade-in">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1.5">
-                          <LucideIcon name="Terminal" size={14} />
-                          كود SQL للإنشاء في Supabase SQL Editor:
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
-                            triggerFeedback('success', 'تم نسخ كود SQL إلى الحافظة بنجاح!');
-                          }}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-md transition-colors cursor-pointer flex items-center gap-1"
-                        >
-                          <LucideIcon name="Copy" size={12} />
-                          <span>نسخ الكود</span>
-                        </button>
-                      </div>
-                      <pre className="text-[10px] font-mono bg-slate-950 p-2.5 rounded-lg overflow-x-auto text-slate-300 leading-relaxed text-left" dir="ltr">
-                        {SUPABASE_SQL_SCHEMA}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              </div>
-
               {/* Reset Database Button Box */}
               <div className="p-3 bg-rose-50 border border-rose-100 text-rose-950 rounded-xl space-y-2">
                 <h5 className="font-bold text-xs flex items-center gap-1.5 text-rose-800">
@@ -2815,6 +2592,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ATTACHMENT VIEWER & PREVIEW MODAL */}
+      <AttachmentViewerModal
+        attachment={activeAttachmentPreview}
+        onClose={() => setActiveAttachmentPreview(null)}
+      />
 
       {/* Footer System Credit Info */}
       <footer className="bg-white border-t border-slate-100 py-6 text-center mt-12">

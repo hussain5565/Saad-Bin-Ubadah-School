@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { PortfolioPage, Criterion, Attachment, AttachmentType } from '../types';
 import { LucideIcon } from './LucideIcon';
+import { processUploadedFile } from '../utils/imageUtils';
 
 interface ControlPanelPageDetailsProps {
   page: PortfolioPage;
@@ -8,9 +9,9 @@ interface ControlPanelPageDetailsProps {
   onToggleCriterion: (pageId: number, criterionId: string) => void;
   onEditCriterionText: (pageId: number, criterionId: string, newText: string) => void;
   onDeleteCriterion: (pageId: number, criterionId: string) => void;
-  onAddAttachment: (pageId: number, name: string, type: AttachmentType, url: string) => void;
+  onAddAttachment: (pageId: number, name: string, type: AttachmentType, url: string, size?: string) => void;
   onDeleteAttachment: (pageId: number, attachmentId: string) => void;
-  onOpenAttachment?: (url: string, name: string) => void;
+  onOpenAttachment?: (att: Attachment) => void;
 }
 
 export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = ({
@@ -30,6 +31,9 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
   const [attName, setAttName] = useState('');
   const [attType, setAttType] = useState<AttachmentType>('file');
   const [attUrl, setAttUrl] = useState('');
+  const [attSize, setAttSize] = useState<string | undefined>(undefined);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Local state for inline criterion editing
   const [editingCritId, setEditingCritId] = useState<string | null>(null);
@@ -45,9 +49,30 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
   const handleAddAttSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!attName.trim()) return;
-    onAddAttachment(page.id, attName.trim(), attType, attUrl.trim() || '#');
+    onAddAttachment(page.id, attName.trim(), attType, attUrl.trim() || '#', attSize);
     setAttName('');
     setAttUrl('');
+    setAttSize(undefined);
+  };
+
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    try {
+      setIsUploading(true);
+      const file = files[0];
+      const processed = await processUploadedFile(file);
+      setAttName(processed.name);
+      setAttType(processed.type);
+      setAttUrl(processed.dataUrl);
+      setAttSize(processed.sizeString);
+    } catch (err) {
+      console.error('Error reading file:', err);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const startEditingCrit = (crit: Criterion) => {
@@ -200,10 +225,30 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
 
           {/* Section 2: Page Evidence / Attachments Management */}
           <div className="space-y-3 pt-3 border-t border-slate-100 pb-1">
-            <h5 className="text-[11px] font-black text-madrasati-dark flex items-center gap-1.5 border-b border-dashed border-slate-200 pb-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-madrasati-teal"></span>
-              إدارة الشواهد والمرفقات
-            </h5>
+            <div className="flex items-center justify-between border-b border-dashed border-slate-200 pb-1.5">
+              <h5 className="text-[11px] font-black text-madrasati-dark flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-madrasati-teal"></span>
+                إدارة الشواهد والمرفقات
+              </h5>
+              
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="text-[10px] font-bold text-madrasati-teal hover:text-madrasati-dark bg-madrasati-teal-bg/60 border border-madrasati-teal/30 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer hover:bg-madrasati-teal-bg transition-colors"
+              >
+                <LucideIcon name="UploadCloud" size={11} />
+                <span>{isUploading ? 'جارِ القراءة...' : 'رفع ملف / صورة من الجهاز'}</span>
+              </button>
+            </div>
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              onChange={handleFilePicked}
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+            />
 
             {page.attachments.length === 0 ? (
               <p className="text-[10px] text-slate-400 italic text-center py-2 bg-slate-50 rounded-lg">
@@ -237,25 +282,26 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
                         <span className="text-slate-800 font-bold truncate max-w-[150px]" title={att.name}>
                           {att.name}
                         </span>
+                        {att.size && (
+                          <span className="text-[9px] text-slate-400 font-normal">({att.size})</span>
+                        )}
                       </div>
                       
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {att.url && att.url !== '#' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (onOpenAttachment) {
-                                onOpenAttachment(att.url, att.name);
-                              } else {
-                                window.open(att.url, '_blank');
-                              }
-                            }}
-                            className="text-slate-400 hover:text-madrasati-teal p-0.5 hover:bg-slate-100 rounded cursor-pointer"
-                            title="فتح الشاهد"
-                          >
-                            <LucideIcon name="ExternalLink" size={11} />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onOpenAttachment) {
+                              onOpenAttachment(att);
+                            } else if (att.url && att.url !== '#') {
+                              window.open(att.url, '_blank');
+                            }
+                          }}
+                          className="text-slate-400 hover:text-madrasati-teal p-0.5 hover:bg-slate-100 rounded cursor-pointer"
+                          title="فتح وعرض الشاهد"
+                        >
+                          <LucideIcon name="ExternalLink" size={11} />
+                        </button>
                         <button
                           type="button"
                           onClick={() => onDeleteAttachment(page.id, att.id)}
@@ -294,27 +340,30 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
                     className="w-full text-[10px] px-2 py-1 bg-white border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
                   >
                     <option value="file">ملف رسمي (PDF / Word)</option>
-                    <option value="url">رابط خارجي</option>
+                    <option value="image">صورة إثبات / وثيقة</option>
                     <option value="drive">مجلد Google Drive</option>
-                    <option value="image">صورة إثبات</option>
+                    <option value="url">رابط خارجي</option>
                   </select>
                 </div>
               </div>
 
               <div className="flex gap-1.5 items-end">
                 <div className="flex-1 space-y-0.5">
-                  <label className="text-[9px] font-bold text-slate-500">رابط المستند (اختياري)</label>
+                  <label className="text-[9px] font-bold text-slate-500">
+                    {attUrl && attUrl.startsWith('data:') ? 'تم تحميل بيانات الملف بنجاح' : 'رابط المستند السحابي أو الإلكتروني (اختياري)'}
+                  </label>
                   <input
                     type="text"
                     placeholder="https://drive.google.com/..."
-                    value={attUrl}
+                    value={attUrl && attUrl.startsWith('data:') ? `[ملف محلي مرفوع - ${attSize || 'جاهز'}]` : attUrl}
+                    disabled={Boolean(attUrl && attUrl.startsWith('data:'))}
                     onChange={(e) => setAttUrl(e.target.value)}
-                    className="w-full text-[10px] px-2 py-1 bg-white border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-madrasati-teal"
+                    className="w-full text-[10px] px-2 py-1 bg-white border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-madrasati-teal disabled:bg-slate-100 text-slate-600 font-sans"
                   />
                 </div>
                 <button
                   type="submit"
-                  disabled={!attName.trim()}
+                  disabled={!attName.trim() || isUploading}
                   className="bg-madrasati-teal hover:bg-madrasati-dark text-white px-3 py-1 text-[10px] font-bold rounded transition-colors cursor-pointer disabled:opacity-40 shrink-0"
                 >
                   إضافة
@@ -328,3 +377,4 @@ export const ControlPanelPageDetails: React.FC<ControlPanelPageDetailsProps> = (
     </div>
   );
 };
+

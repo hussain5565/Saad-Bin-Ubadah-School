@@ -4,8 +4,8 @@
  */
 export async function compressImageFile(
   file: File | Blob,
-  maxWidth = 600,
-  maxHeight = 600,
+  maxWidth = 800,
+  maxHeight = 800,
   quality = 0.85
 ): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -57,3 +57,50 @@ export async function compressImageFile(
     reader.onerror = (err) => reject(err);
   });
 }
+
+/**
+ * Format bytes into human readable string (KB, MB)
+ */
+export function formatBytes(bytes: number, decimals = 1): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+/**
+ * Helper to process any uploaded file into data URL and metadata
+ */
+export async function processUploadedFile(file: File): Promise<{
+  dataUrl: string;
+  name: string;
+  type: 'image' | 'file' | 'drive' | 'url';
+  sizeString: string;
+}> {
+  const isImage = file.type.startsWith('image/');
+  let dataUrl = '';
+
+  if (isImage) {
+    dataUrl = await compressImageFile(file, 900, 900, 0.85);
+  } else {
+    dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Remove extension from display name if desired or keep clean name
+  const cleanName = file.name.replace(/\.[^/.]+$/, "") || file.name;
+
+  return {
+    dataUrl,
+    name: cleanName,
+    type: isImage ? 'image' : 'file',
+    sizeString: formatBytes(file.size),
+  };
+}
+
